@@ -125,15 +125,60 @@ export function supabaseChildStore(sb) {
       check(res, "bot_diary_entries count");
       return (res.count || 0) > 0;
     },
-    saveRoute: async (row) => { check(await sb.from("bot_newbie_routes").insert(row), "bot_newbie_routes insert"); }
+    saveRoute: async (row) => { check(await sb.from("bot_newbie_routes").insert(row), "bot_newbie_routes insert"); },
+    // История записей — от новых к старым, страницами.
+    history: async (childId, offset, limit) => check(await sb.from("bot_diary_entries").select("date, mood, tags, note, created_at")
+      .eq("child_id", childId).order("date", { ascending: false }).order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1), "bot_diary_entries history") || [],
+    countDiary: async (childId) => {
+      const res = await sb.from("bot_diary_entries").select("id", { count: "exact", head: true }).eq("child_id", childId);
+      check(res, "bot_diary_entries count");
+      return res.count || 0;
+    },
+    // Доступ специалисту (bot_child_shares): активные коды ребёнка, выдача, отзыв, привязка к специалисту.
+    shares: async (childId) => check(await sb.from("bot_child_shares").select("*").eq("child_id", childId)
+      .is("revoked_at", null).order("created_at"), "bot_child_shares select") || [],
+    createShare: async (childId, code) => check(await sb.from("bot_child_shares").insert({ child_id: childId, code }).select().single(),
+      "bot_child_shares insert"),
+    revokeShare: async (childId, id) => (check(await sb.from("bot_child_shares").update({ revoked_at: new Date().toISOString() })
+      .eq("id", id).eq("child_id", childId).is("revoked_at", null).select(), "bot_child_shares revoke") || [])[0] || null,
+    findShare: async (code) => {
+      const row = check(await sb.from("bot_child_shares").select("*, bot_children(id, chat_id, name, age_group)").eq("code", code)
+        .maybeSingle(), "bot_child_shares find");
+      return row ? Object.assign({}, row, { child: row.bot_children || null }) : null;
+    },
+    // Привязать код к специалисту, только если он ещё свободен (два специалиста с одним кодом — нельзя).
+    claimShare: async (id, viewerChatId, viewerName) => check(await sb.from("bot_child_shares")
+      .update({ viewer_chat_id: viewerChatId, viewer_name: viewerName, claimed_at: new Date().toISOString() })
+      .eq("id", id).is("viewer_chat_id", null).is("revoked_at", null).select().maybeSingle(), "bot_child_shares claim"),
+    // Дети, к которым у специалиста есть действующий доступ: [{ id, name, age_group }].
+    viewerChildren: async (viewerChatId) => (check(await sb.from("bot_child_shares").select("bot_children(id, name, age_group)")
+      .eq("viewer_chat_id", viewerChatId).is("revoked_at", null), "bot_child_shares viewer") || [])
+      .map((x) => x.bot_children).filter(Boolean)
   };
   return store;
+}
+
+// Истории семей (public.family_stories): вымышленные демо-истории, читает бот.
+export function supabaseStoryStore(sb) {
+  return {
+    list: async () => {
+      const res = await sb.from("family_stories").select("*").eq("published", true).order("sort");
+      if (res.error) throw new Error("family_stories select: " + res.error.message);
+      return res.data || [];
+    }
+  };
+}
+
+export function memoryStoryStore(list) {
+  return { list: async () => JSON.parse(JSON.stringify(list || [])) };
 }
 
 // Без БД (локальный запуск): всё в памяти процесса, пропадает при перезапуске.
 export function memoryChildStore() {
   const children = [];
   const diary = [];
+  const shares = [];
   const copy = (r) => (r ? JSON.parse(JSON.stringify(r)) : null);
   const find = (chatId) => children.filter((c) => String(c.chat_id) === String(chatId)).pop() || null;
   return {
@@ -153,12 +198,45 @@ export function memoryChildStore() {
       const ids = children.filter((c) => String(c.chat_id) === String(chatId)).map((c) => c.id);
       for (let i = children.length - 1; i >= 0; i--) if (ids.indexOf(children[i].id) !== -1) children.splice(i, 1);
       for (let i = diary.length - 1; i >= 0; i--) if (ids.indexOf(diary[i].child_id) !== -1) diary.splice(i, 1);
+      for (let i = shares.length - 1; i >= 0; i--) if (ids.indexOf(shares[i].child_id) !== -1) shares.splice(i, 1);
     },
     addDiary: async (childId, e) => { diary.push(Object.assign({ child_id: childId, created_at: new Date().toISOString() }, copy(e))); },
     diary: async (childId, fromIso) => diary.filter((e) => e.child_id === childId && e.date >= fromIso)
       .sort((a, b) => (a.date + a.created_at).localeCompare(b.date + b.created_at)).map(copy),
     hasDiary: async (childId) => diary.some((e) => e.child_id === childId),
-    saveRoute: async () => {}
+    saveRoute: async () => {},
+    history: async (childId, offset, limit) => diary.filter((e) => e.child_id === childId)
+      .sort((a, b) => (b.date + b.created_at).localeCompare(a.date + a.created_at)).slice(offset, offset + limit).map(copy),
+    countDiary: async (childId) => diary.filter((e) => e.child_id === childId).length,
+    shares: async (childId) => shares.filter((x) => x.child_id === childId && !x.revoked_at).map(copy),
+    createShare: async (childId, code) => {
+      if (shares.some((x) => x.code === code)) throw new Error("bot_child_shares insert: duplicate key value");
+      const row = { id: globalThis.crypto.randomUUID(), child_id: childId, code, viewer_chat_id: null, viewer_name: null,
+        created_at: new Date().toISOString(), claimed_at: null, revoked_at: null };
+      shares.push(row);
+      return copy(row);
+    },
+    revokeShare: async (childId, id) => {
+      const x = shares.find((y) => y.id === id && y.child_id === childId && !y.revoked_at);
+      if (!x) return null;
+      x.revoked_at = new Date().toISOString();
+      return copy(x);
+    },
+    findShare: async (code) => {
+      const x = shares.find((y) => y.code === code);
+      if (!x) return null;
+      const c = children.find((y) => y.id === x.child_id);
+      return Object.assign(copy(x), { child: c ? { id: c.id, chat_id: c.chat_id, name: c.name, age_group: c.age_group } : null });
+    },
+    claimShare: async (id, viewerChatId, viewerName) => {
+      const x = shares.find((y) => y.id === id && !y.viewer_chat_id && !y.revoked_at);
+      if (!x) return null;
+      Object.assign(x, { viewer_chat_id: viewerChatId, viewer_name: viewerName, claimed_at: new Date().toISOString() });
+      return copy(x);
+    },
+    viewerChildren: async (viewerChatId) => shares.filter((x) => String(x.viewer_chat_id) === String(viewerChatId) && !x.revoked_at)
+      .map((x) => children.find((c) => c.id === x.child_id)).filter(Boolean)
+      .map((c) => ({ id: c.id, name: c.name, age_group: c.age_group }))
   };
 }
 
@@ -448,6 +526,112 @@ export function createBot(deps) {
     lines.push(SEP, t(s, "reportDisclaimer"));
     return lines.join("\n");
   }
+
+  // ---------- Прогресс по неделям, история записей ----------
+  const PROGRESS_WEEKS = 8;
+  const HISTORY_PAGE = 7;
+  const MAX_SHARES = 5;
+  const WEEK_TAGS = [["new_word", "🗣", "cmpWords"], ["tantrum", "😤", "cmpTantrum"], ["bad_sleep", "😴", "cmpSleep"],
+    ["bad_eat", "🍽", "cmpEat"], ["homework", "📝", "cmpHw"]];
+  const emptyWeek = (start) => {
+    const w = { start, good: 0, normal: 0, bad: 0 };
+    WEEK_TAGS.forEach(([k]) => { w[k] = 0; });
+    return w;
+  };
+  // Последние n недель (с понедельника), заканчивая текущей; записи дневника раскладываются по неделям.
+  function weeksFromEntries(list, n) {
+    const today = kzToday();
+    const monday = today - ((new Date(today).getUTCDay() + 6) % 7) * DAY_MS;
+    const weeks = [];
+    for (let i = n - 1; i >= 0; i--) weeks.push(emptyWeek(monday - i * 7 * DAY_MS));
+    list.forEach((e) => {
+      const ms = parseDate(e.date);
+      const w = weeks.find((x) => ms >= x.start && ms < x.start + 7 * DAY_MS);
+      if (!w) return;
+      if (e.mood in w) w[e.mood] += 1;
+      (e.tags || []).forEach((tag) => { if (tag in w && tag !== "start") w[tag] += 1; });
+    });
+    return weeks;
+  }
+  // Недели истории семьи (family_stories.weeks) — в тот же вид.
+  const storyWeeks = (story) => (story.weeks || []).map((x) => Object.assign(emptyWeek(parseDate(x.start)), x, { start: parseDate(x.start) }));
+  const weekTotal = (w) => w.good + w.normal + w.bad;
+  const ddmm = (ms) => isoDate(ms).slice(8, 10) + "." + isoDate(ms).slice(5, 7);
+  const num = (v) => (Math.round(v * 10) / 10).toString().replace(".", ",");
+
+  function progressLines(s, weeks) {
+    return weeks.map((w) => {
+      const total = weekTotal(w);
+      if (!total) return "<code>" + ddmm(w.start) + " ▱▱▱▱▱▱▱</code> " + t(s, "weekNoEntries");
+      const share = w.good / total;
+      const filled = Math.round(share * 7);
+      const marks = WEEK_TAGS.filter(([k]) => w[k]).map(([k, icon]) => icon + w[k]);
+      return "<code>" + ddmm(w.start) + " " + "▰".repeat(filled) + "▱".repeat(7 - filled) + "</code> " + Math.round(share * 100) + "%" +
+        (marks.length ? " · " + marks.join(" ") : "");
+    });
+  }
+
+  // «Было → стало»: первые и последние 2 недели с записями.
+  function compareLines(s, weeks) {
+    const withData = weeks.filter((w) => weekTotal(w) > 0);
+    if (withData.length < 4) return [];
+    const a = withData.slice(0, 2), b = withData.slice(-2);
+    const sum = (ws, k) => ws.reduce((acc, w) => acc + w[k], 0);
+    const pct = (ws) => Math.round(100 * sum(ws, "good") / Math.max(1, ws.reduce((acc, w) => acc + weekTotal(w), 0)));
+    const lines = [t(s, "progressCompare"), t(s, "cmpGood", { a: pct(a), b: pct(b) })];
+    WEEK_TAGS.forEach(([k, , key]) => {
+      if (sum(a, k) || sum(b, k)) lines.push(t(s, key, { a: num(sum(a, k) / a.length), b: num(sum(b, k) / b.length) }));
+    });
+    return lines;
+  }
+
+  function progressBody(s, weeks) {
+    if (!weeks.some((w) => weekTotal(w) > 0)) return t(s, "progressNoData");
+    const cmp = compareLines(s, weeks);
+    return progressLines(s, weeks).join("\n") + "\n<i>" + t(s, "progressLegend") + "</i>" +
+      (cmp.length ? "\n\n" + cmp.join("\n") : "") + "\n\n<i>" + t(s, "progressNote") + "</i>";
+  }
+
+  async function childProgressText(s, c) {
+    const from = kzToday() - (PROGRESS_WEEKS * 7 + 7) * DAY_MS;
+    const weeks = weeksFromEntries(await children.diary(c.id, isoDate(from)), PROGRESS_WEEKS);
+    return t(s, "progressTitle", { name: c.name, n: PROGRESS_WEEKS }) + "\n\n" + progressBody(s, weeks);
+  }
+
+  function historyLine(s, e) {
+    const mood = DIARY_MOODS.find((m) => m.code === e.mood);
+    const tags = (e.tags || []).map((code) => {
+      const tg = DIARY_TAGS.find((x) => x.code === code);
+      return tg ? tg.icon + " " + lbl(s, tg).toLowerCase() : "";
+    }).filter(Boolean).join(", ");
+    return "<b>" + dayLabel(L(s), parseDate(e.date)) + "</b> " + (mood ? mood.icon : "") + (tags ? " · " + esc(tags) : "") +
+      (e.note ? "\n    <i>«" + esc(e.note) + "»</i>" : "");
+  }
+
+  // Ребёнок, к которому у этого чата (специалиста) есть действующий доступ по коду.
+  async function viewerChild(ctx, childId) {
+    if (!childId) return null;
+    return (await children.viewerChildren(ctx.chat.id)).find((c) => c.id === childId) || null;
+  }
+
+  // Истории семей — кэш на 5 минут.
+  let storyCache = null, storyAt = 0;
+  async function loadStories() {
+    if (!deps.stories) return [];
+    if (storyCache && Date.now() - storyAt < 5 * 60 * 1000) return storyCache;
+    try { storyCache = await deps.stories.list(); storyAt = Date.now(); } catch (err) { logError("stories", err); storyCache = storyCache || []; }
+    return storyCache;
+  }
+
+  // Код доступа: 6 символов без похожих (0/O, 1/I).
+  const CODE_ABC = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  function newCode() {
+    const b = new Uint8Array(6);
+    globalThis.crypto.getRandomValues(b);
+    return Array.from(b, (x) => CODE_ABC[x % CODE_ABC.length]).join("");
+  }
+  const viewerName = (from) => ((((from && from.first_name) || "") + " " + ((from && from.last_name) || "")).trim() +
+    (from && from.username ? " (@" + from.username + ")" : "")).slice(0, 100) || "—";
 
   // Маршрут новичка: шаблон по ответам. Диагноз есть → общий план; были без ответа → второе мнение; иначе — по беспокойству.
   const routeKey = (nb) => (nb.been === "diag" ? "route_diag" : nb.been === "noanswer" ? "route_noanswer" : "route_" + nb.concern + "_no");
@@ -997,6 +1181,115 @@ export function createBot(deps) {
       };
     },
 
+    // ----- Прогресс и история (свой ребёнок) -----
+    progress: async (s, ctx) => {
+      const c = await loadChild(ctx);
+      if (!c) return { redirect: "needChild" };
+      return {
+        text: await childProgressText(s, c),
+        kb: kb().text(t(s, "btnHistory"), "hp:0").row()
+          .text(t(s, "btnShare"), "go:share").text(t(s, "btnReport"), "go:report").row()
+          .text("← " + t(s, "btnMenu"), "go:menu")
+      };
+    },
+
+    // История записей: своя (hist.own) или ребёнка по доступу специалиста (hist.child).
+    history: async (s, ctx) => {
+      const h = s.ui.hist || { own: true, page: 0 };
+      const c = h.own ? await loadChild(ctx) : await viewerChild(ctx, h.child);
+      if (!c) return { redirect: h.own ? "needChild" : "viewed" };
+      const total = await children.countDiary(c.id);
+      const pages = Math.max(1, Math.ceil(total / HISTORY_PAGE));
+      const page = Math.min(Math.max(0, h.page || 0), pages - 1);
+      const list = total ? await children.history(c.id, page * HISTORY_PAGE, HISTORY_PAGE) : [];
+      const pref = h.own ? "hp:" : "vh:" + c.id + ":";
+      const k = kb();
+      if (page > 0) k.text(t(s, "btnNewer"), pref + (page - 1));
+      if (page < pages - 1) k.text(t(s, "btnOlder"), pref + (page + 1));
+      k.row().text(t(s, "btnProgressBack"), h.own ? "go:progress" : "vw:" + c.id).row().text("← " + t(s, "btnMenu"), "go:menu");
+      return {
+        text: t(s, "historyTitle", { name: c.name, page: page + 1, pages }) + "\n\n" +
+          (list.length ? list.map((e) => historyLine(s, e)).join("\n") : t(s, "historyEmpty")),
+        kb: k
+      };
+    },
+
+    // Коды доступа для специалистов.
+    share: async (s, ctx) => {
+      const c = await loadChild(ctx);
+      if (!c) return { redirect: "needChild" };
+      const list = await children.shares(c.id);
+      const lines = [t(s, "shareIntro", { name: c.name }), ""];
+      if (!list.length) lines.push(t(s, "shareNone"));
+      list.forEach((x) => lines.push(x.viewer_chat_id
+        ? t(s, "shareUsed", { code: x.code, who: x.viewer_name || "—", date: dateLabel(x.claimed_at) })
+        : t(s, "shareUnused", { code: x.code })));
+      const k = kb();
+      if (list.length < MAX_SHARES) k.text(t(s, "btnShareNew"), "sh:new").row();
+      list.forEach((x) => k.text(t(s, "btnShareRevoke", { code: x.code }), "sh:rev:" + x.id).row());
+      k.text(t(s, "btnProgressBack"), "go:progress").text("← " + t(s, "btnMenu"), "go:menu");
+      return { text: lines.join("\n"), kb: k };
+    },
+
+    // ----- Специалист: доступ к дневникам по коду -----
+    codeEnter: (s) => ({ text: t(s, "codeQ"), kb: kb().text("← " + t(s, "btnMenu"), "go:menu") }),
+
+    viewed: async (s, ctx) => {
+      const list = await children.viewerChildren(ctx.chat.id);
+      const k = kb();
+      list.forEach((c) => k.text("👀 " + c.name + ", " + childAgeLabel(s, c.age_group), "vw:" + c.id).row());
+      k.text(t(s, "btnCodeEnter"), "go:codeEnter").row().text("← " + t(s, "btnMenu"), "go:menu");
+      return { text: t(s, list.length ? "viewedTitle" : "viewedEmpty"), kb: k };
+    },
+
+    viewedChild: async (s, ctx) => {
+      const c = await viewerChild(ctx, s.ui.viewChild);
+      if (!c) return { redirect: "viewed" };
+      return {
+        text: t(s, "viewedHead", { name: c.name, age: childAgeLabel(s, c.age_group) }) + "\n\n" +
+          (await childProgressText(s, c)).split("\n").slice(2).join("\n"),
+        kb: kb().text(t(s, "btnHistory"), "vh:" + c.id + ":0").text(t(s, "btnReport30"), "vr:" + c.id).row()
+          .text(t(s, "btnViewedList"), "go:viewed").text("← " + t(s, "btnMenu"), "go:menu")
+      };
+    },
+
+    // ----- Истории семей (демо) -----
+    stories: async (s) => {
+      const list = await loadStories();
+      const k = kb();
+      list.forEach((st) => k.text(t(s, "btnStory", { title: lbl(s, st.title) }).replace(/&amp;/g, "&"), "fs:" + st.id).row());
+      k.text("← " + t(s, "btnMenu"), "go:menu");
+      return { text: t(s, "storiesTitle") + "\n\n" + (list.length ? "<i>" + t(s, "storiesDemo") + "</i>" : t(s, "storiesEmpty")), kb: k };
+    },
+
+    story: async (s) => {
+      const st = (await loadStories()).find((x) => x.id === s.ui.story);
+      if (!st) return { redirect: "stories" };
+      const lines = ["📖 <b>" + esc(lbl(s, st.title)) + "</b>", "",
+        t(s, "lStoryChild") + ": <b>" + esc(st.child_name) + "</b>, " + esc(childAgeLabel(s, st.age_group)),
+        t(s, "lStoryConcern") + ": " + esc(lbl(s, st.concern)),
+        t(s, "lStorySpecs") + ": " + esc((st.specialists || []).map((x) => lbl(s, x)).join(", ")),
+        t(s, "lStoryPeriod") + ": " + t(s, "storyPeriod", { date: dayLabel(L(s), parseDate(st.started_on)), n: (st.weeks || []).length }),
+        "", esc(lbl(s, st.summary)), "", "<b>" + t(s, "lMilestones") + "</b>"];
+      (st.milestones || []).forEach((m) => lines.push("• " + t(s, "milestone", { n: m.week, text: lbl(s, m) })));
+      lines.push("", "<b>" + t(s, "lHelped") + "</b>", esc(lbl(s, st.helped)), "", "<i>" + t(s, "storiesDemo") + "</i>");
+      return {
+        text: lines.join("\n"),
+        kb: kb().text(t(s, "btnStoryProgress"), "fsp:" + st.id).row().text(t(s, "btnAllStories"), "go:stories")
+          .text("← " + t(s, "btnMenu"), "go:menu")
+      };
+    },
+
+    storyProgress: async (s) => {
+      const st = (await loadStories()).find((x) => x.id === s.ui.story);
+      if (!st) return { redirect: "stories" };
+      return {
+        text: "📈 <b>" + esc(lbl(s, st.title)) + "</b>\n\n" + progressBody(s, storyWeeks(st)) + "\n<i>" + t(s, "storiesDemo") + "</i>",
+        kb: kb().text("📖 " + lbl(s, st.title), "fs:" + st.id).row().text(t(s, "btnAllStories"), "go:stories")
+          .text("← " + t(s, "btnMenu"), "go:menu")
+      };
+    },
+
     // ----- Отчёт для специалиста -----
     report: async (s, ctx) => {
       const c = await loadChild(ctx);
@@ -1060,15 +1353,22 @@ export function createBot(deps) {
       return { text, kb: k };
     },
 
-    menu: (s) => {
+    menu: async (s, ctx) => {
       const k = kb().text(t(s, "btnSupport"), "go:supportIntro").row()
         .text(t(s, "btnFindSpec"), "go:sections").row()
         .text(t(s, "btnChildCard"), "go:childCard").row()
         .text(t(s, "btnDiary"), "go:diary").row()
+        .text(t(s, "btnProgress"), "go:progress").row()
         .text(t(s, "btnReport"), "go:report").row()
         .text(t(s, "btnNewbie"), "go:newbie").row()
+        .text(t(s, "btnStories"), "go:stories").row()
         .text(t(s, "btnMyReqs"), "go:reqs").row()
         .text(t(s, "btnSettings"), "go:settings").row();
+      // Специалист: дневники, открытые ему родителями, или ввод кода.
+      let viewed = [];
+      try { viewed = ctx && ctx.chat ? await children.viewerChildren(ctx.chat.id) : []; } catch (err) { logError("viewerChildren", err); }
+      if (viewed.length) k.text(t(s, "btnViewed", { n: viewed.length }), "go:viewed").row();
+      else k.text(t(s, "btnCodeEnter"), "go:codeEnter").row();
       const favs = s.q.fav.map(profile).filter(Boolean);
       let text = t(s, "menuQ");
       if (favs.length) {
@@ -1957,6 +2257,97 @@ export function createBot(deps) {
     return show(ctx, "reportSent");
   });
 
+  // ----- Прогресс, история, доступ специалисту, истории семей -----
+  bot.callbackQuery(/^hp:(\d+)$/, (ctx) => {
+    ctx.session.ui.hist = { own: true, page: Number(ctx.match[1]) };
+    return show(ctx, "history");
+  });
+  bot.callbackQuery(/^vh:([\w-]+):(\d+)$/, (ctx) => {
+    ctx.session.ui.hist = { own: false, child: ctx.match[1], page: Number(ctx.match[2]) };
+    return show(ctx, "history");
+  });
+  bot.callbackQuery(/^vw:([\w-]+)$/, (ctx) => {
+    ctx.session.ui.viewChild = ctx.match[1];
+    return show(ctx, "viewedChild");
+  });
+  // Отчёт за 30 дней по ребёнку с доступом — отдельным сообщением, как у родителя.
+  bot.callbackQuery(/^vr:([\w-]+)$/, async (ctx) => {
+    const s = ctx.session;
+    const c = await viewerChild(ctx, ctx.match[1]);
+    if (!c) return show(ctx, "viewed");
+    s.ui.viewChild = c.id;
+    const to = kzToday(), from = to - 29 * DAY_MS;
+    const list = await children.diary(c.id, isoDate(from));
+    if (!list.length) { s.ui.err = t(s, "reportEmpty"); return show(ctx, "viewedChild"); }
+    await ctx.reply(reportText(s, c, list, from, to), { parse_mode: "HTML" });
+    s.msgId = null;
+    return show(ctx, "viewedChild");
+  });
+
+  bot.callbackQuery("sh:new", async (ctx) => {
+    const s = ctx.session;
+    const c = await loadChild(ctx);
+    if (!c) return show(ctx, "needChild");
+    if ((await children.shares(c.id)).length >= MAX_SHARES) { s.ui.err = t(s, "shareLimit"); return show(ctx, "share"); }
+    let row = null;
+    for (let i = 0; i < 4 && !row; i++) {
+      try { row = await children.createShare(c.id, newCode()); } catch (err) { if (!/duplicate|unique/i.test(String(err && err.message))) throw err; }
+    }
+    if (!row) throw new Error("share code: no free code");
+    s.ui.flash = t(s, "shareCreated", { code: row.code, bot: (bot.botInfo && bot.botInfo.username) || "" });
+    return show(ctx, "share");
+  });
+
+  bot.callbackQuery(/^sh:rev:([\w-]+)$/, async (ctx) => {
+    const s = ctx.session;
+    const c = await loadChild(ctx);
+    if (!c) return show(ctx, "needChild");
+    const x = await children.revokeShare(c.id, ctx.match[1]);
+    if (x) s.ui.flash = t(s, "shareRevoked", { code: x.code });
+    return show(ctx, "share");
+  });
+
+  bot.callbackQuery(/^fs(p?):([\w-]+)$/, (ctx) => {
+    ctx.session.ui.story = ctx.match[2];
+    return show(ctx, ctx.match[1] ? "storyProgress" : "story");
+  });
+
+  // Специалист вводит код родителя: /code ABC123 или текстом на экране «Ввести код».
+  async function claimCode(ctx, raw) {
+    const s = ctx.session;
+    if (!s.lang) s.lang = ctx.from && ctx.from.language_code === "kk" ? "kk" : "ru"; // специалисту анкета не нужна
+    s.msgId = null;
+    const code = String(raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const fail = (key) => { s.ui.err = t(s, key); return show(ctx, "codeEnter"); };
+    if (!/^[A-Z2-9]{6}$/.test(code)) return fail("codeBad");
+    const sh = await children.findShare(code);
+    if (!sh || sh.revoked_at || !sh.child) return fail("codeBad");
+    if (String(sh.child.chat_id) === String(ctx.chat.id)) return fail("codeOwn");
+    if (sh.viewer_chat_id && String(sh.viewer_chat_id) !== String(ctx.chat.id)) return fail("codeUsed");
+    if (!sh.viewer_chat_id) {
+      const who = viewerName(ctx.from);
+      if (!(await children.claimShare(sh.id, ctx.chat.id, who))) return fail("codeUsed"); // успел другой
+      // Родитель узнаёт, кто получил доступ (и может сразу отозвать).
+      try {
+        const ps = (await storage.read(String(sh.child.chat_id))) || {};
+        await bot.api.sendMessage(sh.child.chat_id, t({ lang: ps.lang || "ru" }, "parentNotified", { name: sh.child.name, who }),
+          { parse_mode: "HTML", reply_markup: kb().text(t({ lang: ps.lang || "ru" }, "btnShare"), "go:share") });
+      } catch (err) { logError("share notify", err); }
+    }
+    s.ui.viewChild = sh.child.id;
+    s.ui.flash = t(s, "codeOk", { name: sh.child.name });
+    return show(ctx, "viewedChild");
+  }
+
+  bot.command("code", (ctx) => {
+    const arg = String(ctx.match || "").trim();
+    if (arg) return claimCode(ctx, arg);
+    const s = ctx.session;
+    if (!s.lang) s.lang = ctx.from && ctx.from.language_code === "kk" ? "kk" : "ru";
+    s.msgId = null;
+    return show(ctx, "codeEnter");
+  });
+
   // ----- Маршрут новичка -----
   bot.callbackQuery(/^nb:([acsb]):([\w-]+)$/, async (ctx) => {
     const s = ctx.session;
@@ -2016,6 +2407,8 @@ export function createBot(deps) {
       return show(ctx, "menu");
     }
     const screen = s.screen;
+
+    if (screen === "codeEnter") return claimCode(ctx, text);
 
     if (screen === "cityOther") {
       await ctx.deleteMessage().catch(() => {});

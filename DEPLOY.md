@@ -38,6 +38,13 @@
 локальный запуск откажется стартовать, чтобы не отключить прод: для разработки используйте отдельного бота
 (`node index.js --env .env.dev` со своим `BOT_TOKEN`).
 
+## Прогресс, истории семей, доступ специалисту (бот)
+Таблицы `family_stories` (демо, чтение открыто) и `bot_child_shares` (только service_role) — миграция
+`20261115230000_progress_stories_shares.sql`. Истории генерирует `supabase/demo/gen_stories.py` → миграция данных.
+Демо-дневник для своего чата (чтобы показать прогресс на демо, не миграция — id чата в репозиторий не кладём):
+`python supabase/demo/gen_demo_child.py <chat_id> > demo.sql`, затем `psql "<строка подключения>" -f demo.sql`.
+Если прямой адрес БД недоступен (нет IPv6) — пулер: `host=aws-1-ap-south-1.pooler.supabase.com user=postgres.<ref>`.
+
 ## Демо-специалисты
 Таблица `public.specialists` — 536 вымышленных профилей (`is_demo = true`), чтение открыто, запись только service_role.
 Набор генерирует `supabase/demo/gen_specialists.py` (детерминированно): у каждой комбинации условий поиска есть хотя бы
