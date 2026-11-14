@@ -1,153 +1,191 @@
-// Логика Telegram-бота Mama Pro, общая для двух запусков:
+// Логика Telegram-бота Mama Pro (сценарий родительского бота — mama.md), общая для двух запусков:
 //   прод — Supabase Edge Function (webhook): supabase/functions/telegram-bot/index.ts;
 //   локально — long polling: bot/index.js.
-// Без импортов: grammY и клиент Supabase передаются снаружи (у Deno и Node они подключаются по-разному).
-// Состояние диалога — сессия grammY по chat.id: в проде в таблице public.bot_sessions, локально в памяти.
+// grammY и клиент Supabase передаются снаружи (у Deno и Node они подключаются по-разному).
+//
+// Устройство: каждый экран — функция состояния сессии (текст + кнопки). Сессия хранит язык, анкету,
+// условия поиска, избранное и текущий экран, поэтому после паузы /start открывает сохранённый шаг.
+// Обращения — отдельное хранилище (в проде таблица public.bot_requests); сотрудники отвечают
+// из служебного чата STAFF_CHAT_ID кнопками под карточкой обращения.
+import {
+  CITIES, SUPPORT_CITIES, AGES, AGE_NONE, THEMES, SECTIONS, CLASS_LANGS, FORMATS, BUDGETS, BUDGET_MAX,
+  CONTACT_TIMES, PROFILES, TEXT, CHOOSE_LANG
+} from "./catalog.mjs";
 
 export const SITE_URL = "https://mama-pro-hack.vercel.app";
-const GENERIC_ERROR = "Что-то пошло не так, попробуйте позже";
+const SESSION_VERSION = 2;
 
-// ---------- Данные ----------
-// Описания типов специалистов — те же, что в карточках на лендинге.
-export const SPECIALISTS = {
-  logoped: { name: "логопед", desc: "помогает развивать речь и коммуникацию ребёнка." },
-  defect: { name: "дефектолог", desc: "занимается развитием мышления, внимания и памяти." },
-  neuro: { name: "нейропсихолог", desc: "оценивает когнитивные функции и подбирает упражнения." },
-  psych: { name: "психолог", desc: "поддерживает эмоционально — ребёнка и всю семью." },
-  lfk: { name: "ЛФК-инструктор", desc: "развивает моторику и координацию через движение." },
-  aba: { name: "АВА-терапевт", desc: "формирует навыки и поведение поэтапно, в игре." }
-};
-
-export const AGES = [
-  { label: "до 3 лет", value: "до 3" },
-  { label: "3–6 лет", value: "3–6" },
-  { label: "7–12 лет", value: "7–12" },
-  { label: "13+ лет", value: "13+" }
-];
-
-// Правила подбора: ответ -> типы специалистов по убыванию приоритета.
-export const TOPICS = [
-  { label: "Речь", value: "речь", rec: ["logoped"] },
-  { label: "Поведение и эмоции", value: "поведение и эмоции", rec: ["psych", "aba"] },
-  { label: "Обучение и внимание", value: "обучение и внимание", rec: ["neuro", "defect"] },
-  { label: "Моторика", value: "моторика", rec: ["lfk"] },
-  { label: "Не знаю", value: "не знаю", rec: ["defect"] }
-];
-export const DONT_KNOW = 4; // индекс «Не знаю» в TOPICS
-const MAX_RECS = 2;
-
-export const FORMATS = [
-  { label: "Онлайн", value: "онлайн" },
-  { label: "Очно", value: "очно" },
-  { label: "Любой", value: "любой" }
-];
-
-const FAQ = [
-  {
-    q: "Как выбрать специалиста?",
-    a: "Пройдите короткий опрос в боте: он подскажет, какой тип специалиста стоит рассмотреть — например, логопеда, дефектолога или психолога. Это ориентир, а не диагноз. Если сомневаетесь, обсудите запрос с лечащим врачом, а затем оставьте заявку — мы свяжемся с вами."
-  },
-  {
-    q: "Сколько это стоит?",
-    a: "Стоимость зависит от специалиста. Фиксированных тарифов пока нет — цену нужно уточнять у выбранного специалиста до записи. (пример)"
-  },
-  {
-    q: "Как проверяются специалисты?",
-    a: "(пример) Здесь появится описание: какие документы проверяются и что специалист указывает о себе сам. Сейчас это заглушка — порядок проверки будет описан позже."
-  },
-  {
-    q: "Онлайн или очно?",
-    a: "Онлайн удобно, если рядом нет подходящего специалиста или трудно ездить. Очно часто лучше для занятий с движением и моторикой. Формат можно обсудить со специалистом; в опросе можно выбрать «любой»."
-  },
-  {
-    q: "Как хранятся мои данные?",
-    a: "Имя, контакт, ответы опроса (если вы его проходили), ваш Telegram id и username сохраняются в базе заявок и используются только для связи с вами. Пока вы не отправили заявку, ответы опроса хранятся только во временном состоянии диалога. Не пишите лишних сведений о здоровье ребёнка. Сроки хранения и порядок удаления данных будут описаны позже. (пример)"
-  },
-  {
-    q: "Что, если специалист не подошёл?",
-    a: "Это нормально: подходящий специалист находится не всегда с первого раза. Оставьте заявку ещё раз и напишите, что не подошло — формат, подход или время. Мы вернёмся к подбору."
-  }
-];
-
-const GREETING = "Здравствуйте! Я помощник Mama Pro 💛\n" +
-  "Помогу понять, какой коррекционный специалист может подойти вашему ребёнку, отвечу на частые вопросы и приму заявку.\n\n" +
-  "С чего начнём?";
-
-export function recommend(topicIdx) {
-  var score = {};
-  var order = [];
-  topicIdx.forEach(function (ti) {
-    var list = TOPICS[ti].rec;
-    list.forEach(function (key, i) {
-      if (!(key in score)) { score[key] = 0; order.push(key); }
-      score[key] += list.length - i;
-    });
-  });
-  order.sort(function (a, b) { return score[b] - score[a]; });
-  return { keys: order.slice(0, MAX_RECS), cut: order.length > MAX_RECS };
-}
-
-// Хранилище сессий grammY в таблице public.bot_sessions (клиент с service_role, RLS без политик).
+// ---------- Хранилища ----------
+// Сессии grammY в таблице public.bot_sessions (клиент с service_role, RLS без политик).
 export function supabaseSessionStorage(sb) {
   return {
-    read: async function (key) {
-      var res = await sb.from("bot_sessions").select("value").eq("key", key).maybeSingle();
+    read: async (key) => {
+      const res = await sb.from("bot_sessions").select("value").eq("key", key).maybeSingle();
       if (res.error) throw new Error("bot_sessions read: " + res.error.message);
       return res.data ? res.data.value : undefined;
     },
-    write: async function (key, value) {
-      var res = await sb.from("bot_sessions").upsert({ key: key, value: value, updated_at: new Date().toISOString() });
+    write: async (key, value) => {
+      const res = await sb.from("bot_sessions").upsert({ key, value, updated_at: new Date().toISOString() });
       if (res.error) throw new Error("bot_sessions write: " + res.error.message);
     },
-    delete: async function (key) {
-      var res = await sb.from("bot_sessions").delete().eq("key", key);
+    delete: async (key) => {
+      const res = await sb.from("bot_sessions").delete().eq("key", key);
       if (res.error) throw new Error("bot_sessions delete: " + res.error.message);
     }
   };
 }
 
-// deps: { Bot, InlineKeyboard, session, token, botConfig?, supabase?, storage?, logError, extend? }
-//   storage — хранилище сессий (по умолчанию в памяти); extend(bot, api) — подключить доп. обработчики
-//   (виджет) до общего обработчика текста.
+export function memorySessionStorage() {
+  const map = new Map();
+  return {
+    read: async (key) => (map.has(key) ? JSON.parse(map.get(key)) : undefined),
+    write: async (key, value) => { map.set(key, JSON.stringify(value)); },
+    delete: async (key) => { map.delete(key); }
+  };
+}
+
+// Обращения в таблице public.bot_requests. Запись: { id, chat_id, kind, status, snapshot, proposal, answer, created_at }.
+export function supabaseRequestStore(sb) {
+  const check = (res, what) => { if (res.error) throw new Error("bot_requests " + what + ": " + res.error.message); return res.data; };
+  return {
+    create: async (row) => check(await sb.from("bot_requests").insert(row).select().single(), "insert"),
+    get: async (id) => check(await sb.from("bot_requests").select("*").eq("id", id).maybeSingle(), "select"),
+    list: async (chatId) => check(await sb.from("bot_requests").select("*").eq("chat_id", chatId)
+      .order("created_at", { ascending: false }).limit(20), "list"),
+    update: async (id, patch) => check(await sb.from("bot_requests")
+      .update(Object.assign({}, patch, { updated_at: new Date().toISOString() })).eq("id", id).select().single(), "update")
+  };
+}
+
+export function memoryRequestStore() {
+  const rows = [];
+  const copy = (r) => (r ? JSON.parse(JSON.stringify(r)) : null);
+  return {
+    create: async (row) => {
+      const r = Object.assign({ id: globalThis.crypto.randomUUID(), status: "accepted", proposal: null, answer: null,
+        created_at: new Date().toISOString() }, row);
+      rows.push(r);
+      return copy(r);
+    },
+    get: async (id) => copy(rows.find((r) => r.id === id)),
+    list: async (chatId) => rows.filter((r) => r.chat_id === chatId).reverse().slice(0, 20).map(copy),
+    update: async (id, patch) => {
+      const r = rows.find((x) => x.id === id);
+      if (!r) throw new Error("bot_requests update: not found");
+      Object.assign(r, patch);
+      return copy(r);
+    }
+  };
+}
+
+// ---------- Вспомогательное ----------
+const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const NBSP = " ";
+export const money = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, NBSP) + NBSP + "₸";
+const NAME_RE = /^[\p{L}\p{M}][\p{L}\p{M}'’-]*$/u;
+
+function initialState() {
+  return {
+    v: SESSION_VERSION,
+    lang: null,
+    screen: "lang",
+    msgId: null,
+    ret: null, // экран, куда вернуться после редактирования поля (сводка, условия, настройки)
+    notify: true,
+    p: { city: null, first: "", last: "", phone: "", age: null, topic: null, time: null },
+    q: { dir: null, clang: null, fmt: null, budget: null, idx: 0, fav: [], cmp: [] },
+    ui: { theme: null, sec: null, spec: null, req: null, info: false, err: null, flash: null,
+      pendingFirst: null, tmpBudget: null, prev: null, retry: null },
+    staff: null // ожидание ответа сотрудника (только в служебном чате)
+  };
+}
+
+// deps: { Bot, InlineKeyboard, session, token, botConfig?, supabase?, storage?, requests?, staffChatId?, logError, extend? }
 export function createBot(deps) {
-  var InlineKeyboard = deps.InlineKeyboard;
-  var supabase = deps.supabase || null;
-  var logError = deps.logError || function (where, err) { console.error("[" + where + "] " + err); };
+  const InlineKeyboard = deps.InlineKeyboard;
+  const supabase = deps.supabase || null;
+  const storage = deps.storage || memorySessionStorage();
+  const requests = deps.requests || memoryRequestStore();
+  const staffChatId = deps.staffChatId ? String(deps.staffChatId) : "";
+  const logError = deps.logError || ((where, err) => console.error("[" + where + "] " + err));
 
-  function initialState() {
-    return { step: null, msgId: null, consent: false, lead: {}, quiz: null };
+  // ---------- Тексты ----------
+  const L = (s) => (s && s.lang === "kk" ? "kk" : "ru");
+  const t = (s, key, vars) => {
+    const str = TEXT[L(s)][key] ?? TEXT.ru[key] ?? key;
+    return vars ? str.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? esc(vars[k]) : m)) : str;
+  };
+  const lbl = (s, obj) => obj[L(s)];
+
+  const cityLabel = (s, c) => (!c ? t(s, "notSet") : c.id ? lbl(s, CITIES.find((x) => x.id === c.id) || { ru: c.id, kk: c.id }) : c.name);
+  const ageLabel = (s, a) => (a === null || a === undefined || a === AGE_NONE ? t(s, "notSet") : lbl(s, AGES[a]));
+  const topicOf = (key) => {
+    if (typeof key !== "string") return null;
+    const [ti, ii] = key.split(":").map(Number);
+    return THEMES[ti] && THEMES[ti].items[ii] ? { theme: THEMES[ti], item: THEMES[ti].items[ii] } : null;
+  };
+  const topicLabel = (s, key) => { const x = topicOf(key); return x ? lbl(s, x.item) : t(s, "notSet"); };
+  const dirOf = (key) => {
+    if (typeof key !== "string") return null;
+    const [si, di] = key.split(":").map(Number);
+    return SECTIONS[si] && SECTIONS[si].dirs[di] ? { sec: si, dir: SECTIONS[si].dirs[di] } : null;
+  };
+  const dirLabel = (s, key) => { const x = dirOf(key); return x ? lbl(s, x.dir) : t(s, "notSet"); };
+  const budgetLabel = (s, b) => (b === null || b === undefined ? t(s, "notSet")
+    : b < 0 ? t(s, "budgetNone") : b === 0 ? t(s, "budgetFree") : t(s, "budgetUpTo", { sum: money(b) }));
+  const fullName = (p) => (p.first + " " + p.last).trim();
+  const priceLabel = (s, pr) => t(s, "priceFmt", { price: pr.price === 0 ? t(s, "free") : money(pr.price), min: pr.minutes });
+  const profile = (id) => PROFILES.find((x) => x.id === id) || null;
+  const statusLabel = (s, st) => t(s, "st_" + st);
+  const dateLabel = (iso) => { const d = String(iso || "").slice(0, 10).split("-"); return d.length === 3 ? d[2] + "." + d[1] + "." + d[0] : ""; };
+
+  // ---------- Подбор ----------
+  function matches(pr, s) {
+    const p = s.p, q = s.q;
+    if (pr.dir !== q.dir) return false;
+    if (p.age !== null && p.age !== AGE_NONE && pr.ages.indexOf(p.age) === -1) return false;
+    const cl = CLASS_LANGS[q.clang];
+    if (!cl || (cl.id !== "any" && pr.langs.indexOf(cl.id) === -1)) return false;
+    const f = FORMATS[q.fmt];
+    const offlineOk = pr.formats.indexOf("off") !== -1 && !!(p.city && p.city.id === pr.city);
+    const onlineOk = pr.formats.indexOf("on") !== -1;
+    if (!f || (f.id === "off" && !offlineOk) || (f.id === "on" && !onlineOk) || (f.id === "any" && !offlineOk && !onlineOk)) return false;
+    if (q.budget === null) return false;
+    if (q.budget >= 0 && pr.price > q.budget) return false;
+    return true;
+  }
+  const results = (s) => PROFILES.filter((pr) => matches(pr, s));
+  // Первый незаполненный параметр поиска (экран), либо null.
+  const missingCondition = (s) => (!dirOf(s.q.dir) ? "sections" : s.q.clang === null ? "clang"
+    : s.q.fmt === null ? "fmt" : s.q.budget === null ? "budget" : null);
+  // Первое незаполненное обязательное поле обращения (экран), либо null.
+  const missingRequired = (s) => (!s.p.first || !s.p.last ? "name" : !s.p.phone ? "phone" : !topicOf(s.p.topic) ? "themes" : null);
+
+  function cardLines(s, pr) {
+    const fm = pr.formats.map((f) => t(s, f === "off" ? "fmtOff" : "fmtOn")).join(", ");
+    const lg = pr.langs.map((x) => t(s, x === "kk" ? "langKk" : "langRu")).join(", ");
+    return [
+      "<b>" + esc(pr.name) + "</b> — " + esc(dirLabel(s, pr.dir)),
+      t(s, "lCity") + ": " + esc(cityLabel(s, { id: pr.city })),
+      t(s, "lFormat") + ": " + esc(fm),
+      t(s, "lLangs") + ": " + esc(lg),
+      t(s, "lAges") + ": " + esc(pr.ages.map((a) => lbl(s, AGES[a])).join(", ")),
+      t(s, "lPrice") + ": " + priceLabel(s, pr),
+      t(s, pr.acceptsNew ? "newOk" : "newNo")
+    ];
   }
 
-  function resetLead(s) {
-    s.step = null;
-    s.consent = false;
-    s.lead = {};
-  }
-
-  function newQuiz() {
-    return { step: 1, age: null, topics: [], format: null, city: "", rec: [], done: false };
-  }
-
-  function menuKeyboard() {
-    return new InlineKeyboard()
-      .text("Подобрать специалиста", "quiz:start").row()
-      .text("Частые вопросы", "faq").row()
-      .text("Оставить заявку", "lead:start").row()
-      .url("Наш сайт", SITE_URL);
-  }
-
+  // ---------- Отрисовка ----------
   function isNotModified(err) {
     return !!(err && err.description && String(err.description).indexOf("message is not modified") !== -1);
   }
 
-  // Показывает экран: редактирует текущее сообщение, а если нельзя — отправляет новое.
-  async function render(ctx, text, keyboard) {
-    var chatId = ctx.chat.id;
-    var s = ctx.session;
-    var extra = { reply_markup: keyboard };
-    var tapped = ctx.callbackQuery && ctx.callbackQuery.message;
+  // Показывает экран: редактирует текущее сообщение бота, а если нельзя — отправляет новое.
+  async function render(ctx, chatId, text, kb) {
+    const s = ctx.session;
+    const extra = { reply_markup: kb, parse_mode: "HTML", link_preview_options: { is_disabled: true } };
+    const tapped = ctx.callbackQuery && ctx.callbackQuery.message;
     if (tapped) s.msgId = tapped.message_id;
-
     if (s.msgId) {
       try {
         await ctx.api.editMessageText(chatId, s.msgId, text, extra);
@@ -156,316 +194,1009 @@ export function createBot(deps) {
         if (isNotModified(err)) return;
       }
     }
-    var sent = await ctx.api.sendMessage(chatId, text, extra);
+    const sent = await ctx.api.sendMessage(chatId, text, extra);
     s.msgId = sent.message_id;
   }
 
-  // Убираем ответ пользователя из чата, чтобы не засорять его (и не оставлять там контакты).
-  function removeUserMessage(ctx) {
-    return ctx.deleteMessage().catch(function () {});
+  const kb = () => new InlineKeyboard();
+  const backTo = (s, def) => "go:" + (s.ret || def);
+  // Кнопки по две в ряд.
+  function pairs(k, items) {
+    items.forEach((it, i) => { k.text(it[0], it[1]); if (i % 2 === 1) k.row(); });
+    if (items.length % 2 === 1) k.row();
+    return k;
   }
 
-  function topicsText(q) {
-    return q.topics.map(function (i) { return TOPICS[i].value; }).join("; ");
+  async function show(ctx, name, chatIdOverride) {
+    const s = ctx.session;
+    if (!s.lang) name = "lang";
+    let fn = SCREENS[name];
+    if (!fn) { name = "menu"; fn = SCREENS.menu; }
+    const view = await fn(s, ctx);
+    if (view.redirect) return show(ctx, view.redirect, chatIdOverride);
+    s.screen = name;
+    let text = view.text;
+    if (s.ui.flash) text = s.ui.flash + "\n\n" + text;
+    if (s.ui.err) text += "\n\n⚠️ " + s.ui.err;
+    s.ui.flash = null;
+    s.ui.err = null;
+    const chatId = chatIdOverride || (ctx.chat && ctx.chat.id);
+    return render(ctx, chatId, text, view.kb);
   }
 
-  var bot = new deps.Bot(deps.token, deps.botConfig);
+  // После ответа на вопрос: вернуться в сводку/настройки, если поле редактировали оттуда, иначе — дальше по сценарию.
+  function advance(ctx, def) {
+    const s = ctx.session;
+    const r = s.ret;
+    s.ret = null;
+    return show(ctx, r || def);
+  }
+
+  // ---------- Экраны ----------
+  const SCREENS = {
+    lang: () => ({
+      text: CHOOSE_LANG,
+      kb: kb().text("Қазақша", "lang:kk").text("Русский", "lang:ru")
+    }),
+
+    welcome: (s) => ({ text: t(s, "welcome"), kb: kb().text(t(s, "btnStartIntro"), "go:city") }),
+
+    city: (s) => {
+      const k = kb();
+      CITIES.forEach((c, i) => k.text(lbl(s, c), "city:" + i).row());
+      k.text(t(s, "cityOther"), "city:other").row();
+      k.text(t(s, "btnBack"), backTo(s, "welcome"));
+      return { text: t(s, "cityQ"), kb: k };
+    },
+
+    cityOther: (s) => ({ text: t(s, "cityOtherQ"), kb: kb().text(t(s, "btnBack"), "go:city") }),
+
+    cityOnline: (s) => ({
+      text: "<b>" + esc(cityLabel(s, s.p.city)) + "</b>\n" + t(s, "cityOnline"),
+      kb: kb().text(t(s, "btnContinueIntro"), "city:ok").row().text(t(s, "btnChangeCity"), "go:city")
+    }),
+
+    name: (s) => {
+      let text = t(s, "nameQ");
+      if (s.ui.pendingFirst) text += "\n\n" + t(s, "nameGot", { first: s.ui.pendingFirst });
+      return { text, kb: kb().text(t(s, "btnBack"), backTo(s, "city")) };
+    },
+
+    phone: (s) => ({ text: t(s, "phoneQ"), kb: kb().text(t(s, "btnBack"), backTo(s, "name")) }),
+
+    age: (s) => {
+      const k = pairs(kb(), AGES.map((a, i) => [lbl(s, a), "age:" + i]));
+      k.text(t(s, "btnBack"), backTo(s, "phone"));
+      return { text: t(s, "ageQ"), kb: k };
+    },
+
+    themes: (s) => {
+      const k = kb();
+      THEMES.forEach((th, i) => k.text(lbl(s, th), "theme:" + i).row());
+      k.text(t(s, "btnBack"), backTo(s, "age"));
+      return { text: t(s, "themesQ"), kb: k };
+    },
+
+    topics: (s) => {
+      const th = THEMES[s.ui.theme];
+      if (!th) return { redirect: "themes" };
+      const k = kb();
+      th.items.forEach((it, i) => k.text(lbl(s, it), "topic:" + i).row());
+      k.text(t(s, "btnOtherThemes"), "go:themes");
+      return { text: t(s, "topicQ", { theme: lbl(s, th) }), kb: k };
+    },
+
+    next: (s) => ({
+      text: t(s, "nextQ", { name: s.p.first || "" }).replace(", .", "."),
+      kb: kb().text(t(s, "btnSupport"), "go:supportIntro").row()
+        .text(t(s, "btnSearchNow"), "go:sections").row()
+        .text(t(s, "btnMenu"), "go:menu")
+    }),
+
+    supportIntro: (s) => {
+      const ok = !!(s.p.city && s.p.city.id && SUPPORT_CITIES.indexOf(s.p.city.id) !== -1);
+      if (!ok) {
+        return {
+          text: t(s, "supportNoCity"),
+          kb: kb().text(t(s, "btnGoSearch"), "go:sections").row()
+            .text(t(s, "btnOtherCity"), "ed:city").row()
+            .text(t(s, "btnMenu"), "go:menu")
+        };
+      }
+      return {
+        text: t(s, "supportIntro"),
+        kb: kb().text(t(s, "btnRequestConsult"), "go:time").row()
+          .text(t(s, "btnGoSearch"), "go:sections").row()
+          .text(t(s, "btnMenu"), "go:menu")
+      };
+    },
+
+    time: (s) => {
+      const k = kb();
+      CONTACT_TIMES.forEach((c, i) => k.text(lbl(s, c), "time:" + i).row());
+      k.text(t(s, "btnBack"), backTo(s, "supportIntro"));
+      return { text: t(s, "timeQ"), kb: k };
+    },
+
+    reviewSupport: (s) => {
+      const lines = [t(s, "reviewSupport"), ""].concat(supportLines(s).map(([k, v]) => k + ": <b>" + esc(v) + "</b>"));
+      lines.push("", "<i>" + t(s, "consentNote") + "</i>");
+      const k = kb().text(t(s, "btnSend"), "send:support").row();
+      pairs(k, [
+        [t(s, "btnEdName"), "ed:name"], [t(s, "btnEdPhone"), "ed:phone"], [t(s, "btnEdCity"), "ed:city"],
+        [t(s, "btnEdAge"), "ed:age"], [t(s, "btnEdTopic"), "ed:themes"], [t(s, "btnEdTime"), "ed:time"]
+      ]);
+      k.text(t(s, "btnMenu"), "go:menu");
+      return { text: lines.join("\n"), kb: k };
+    },
+
+    supportAccepted: (s) => ({
+      text: t(s, "supportAccepted"),
+      kb: kb().text(t(s, "btnOpenReq"), "rq:" + s.ui.req).row()
+        .text(t(s, "btnContinueSearch"), "search:cont").row()
+        .text(t(s, "btnMainMenu"), "go:menu")
+    }),
+
+    sections: (s) => {
+      const k = kb();
+      SECTIONS.forEach((sec, i) => k.text(lbl(s, sec), "sec:" + i).row());
+      k.text(t(s, "btnDontKnow"), "go:unknown").row();
+      if (s.ret) k.text(t(s, "btnBack"), "go:" + s.ret);
+      else k.text(t(s, "btnMenu"), "go:menu");
+      return { text: t(s, "sectionsQ"), kb: k };
+    },
+
+    unknown: (s) => {
+      const lines = [t(s, "unknownIntro"), ""];
+      const k = kb();
+      SECTIONS.forEach((sec, i) => {
+        lines.push("<b>" + esc(lbl(s, sec)) + "</b> — " + esc(lbl(s, sec.desc)));
+        k.text(lbl(s, sec), "sec:" + i).row();
+      });
+      k.text(t(s, "btnSupportSelf"), "go:supportIntro").row();
+      k.text(t(s, "btnBack"), "go:sections");
+      return { text: lines.join("\n"), kb: k };
+    },
+
+    dirs: (s) => {
+      const sec = SECTIONS[s.ui.sec];
+      if (!sec) return { redirect: "sections" };
+      const k = kb();
+      sec.dirs.forEach((d, i) => k.text(lbl(s, d), "dir:" + i).row());
+      k.text(t(s, "btnAllSections"), "go:sections");
+      return { text: t(s, "dirsQ", { section: lbl(s, sec) }), kb: k };
+    },
+
+    clang: (s) => {
+      const k = kb();
+      CLASS_LANGS.forEach((c, i) => k.text(lbl(s, c), "clang:" + i).row());
+      k.text(t(s, "btnBack"), backTo(s, "dirs"));
+      return { text: t(s, "classLangQ"), kb: k };
+    },
+
+    fmt: (s) => {
+      const k = kb();
+      FORMATS.forEach((f, i) => k.text(lbl(s, f), "fmt:" + i).row());
+      k.text(t(s, "btnBack"), backTo(s, "clang"));
+      return { text: t(s, "formatQ"), kb: k };
+    },
+
+    budget: (s) => {
+      const k = pairs(kb(), BUDGETS.map((b, i) => [budgetLabel(s, b), "bud:" + i]));
+      if (s.ui.tmpBudget !== null && s.ui.tmpBudget !== undefined) {
+        k.text(t(s, "btnUseSum", { sum: money(s.ui.tmpBudget) }), "bud:custom").row();
+      }
+      k.text(t(s, "btnBack"), backTo(s, "fmt"));
+      return { text: t(s, "budgetQ"), kb: k };
+    },
+
+    conditions: (s) => {
+      const lines = [t(s, "conditionsQ"), ""].concat(conditionLines(s).map(([k, v]) => k + ": <b>" + esc(v) + "</b>"));
+      const k = kb().text(t(s, "btnShow"), "res:show").row();
+      pairs(k, [
+        [t(s, "btnEdDir"), "ed:sections"], [t(s, "btnEdAge"), "ed:age"], [t(s, "btnEdCity"), "ed:city"],
+        [t(s, "btnEdClassLang"), "ed:clang"], [t(s, "btnEdFormat"), "ed:fmt"], [t(s, "btnEdBudget"), "ed:budget"]
+      ]);
+      k.text(t(s, "btnMenu"), "go:menu");
+      return { text: lines.join("\n"), kb: k };
+    },
+
+    results: (s) => {
+      const miss = missingCondition(s);
+      if (miss) return { redirect: miss === "sections" ? "sections" : "conditions" };
+      const list = results(s);
+      if (!list.length) {
+        const inDir = PROFILES.some((pr) => pr.dir === s.q.dir);
+        const k = kb().text(t(s, "btnOtherDirs"), "go:sections").row()
+          .text(t(s, "btnChangeCond"), "go:conditions").row();
+        if (inDir && FORMATS[s.q.fmt].id !== "on") k.text(t(s, "btnSeeOnline"), "fmt:online").row();
+        k.text(t(s, "btnAboutSupport"), "go:supportIntro").row().text(t(s, "btnMenu"), "go:menu");
+        return { text: t(s, inDir ? "noMatch" : "noProfiles"), kb: k };
+      }
+      const i = Math.min(Math.max(0, s.q.idx), list.length - 1);
+      s.q.idx = i;
+      const pr = list[i];
+      const text = [t(s, "resultsTitle", { i: i + 1, n: list.length }), ""].concat(cardLines(s, pr))
+        .concat(["", "<i>" + t(s, "demoMark") + "</i>"]).join("\n");
+      const k = kb().text(t(s, "btnMore"), "card:" + pr.id).row();
+      k.text(t(s, s.q.fav.indexOf(pr.id) !== -1 ? "btnUnfav" : "btnFav"), "fav:" + pr.id)
+        .text(t(s, s.q.cmp.indexOf(pr.id) !== -1 ? "btnUncmp" : "btnCmp"), "cmp:" + pr.id).row();
+      if (i > 0) k.text("‹ " + t(s, "btnPrev"), "res:" + (i - 1));
+      if (i < list.length - 1) k.text(t(s, "btnNext") + " ›", "res:" + (i + 1));
+      if (list.length > 1) k.row();
+      if (s.q.cmp.length) k.text(t(s, "btnCompareN", { n: s.q.cmp.length }), "go:compare").row();
+      k.text(t(s, "btnChangeCond"), "go:conditions").text(t(s, "btnMenu"), "go:menu");
+      return { text, kb: k };
+    },
+
+    profile: (s) => {
+      const pr = profile(s.ui.spec);
+      if (!pr) return { redirect: "results" };
+      const text = [t(s, "profileTitle"), ""].concat(cardLines(s, pr))
+        .concat(["", esc(lbl(s, pr.about)), "", "<i>" + t(s, "demoMark") + "</i>"]).join("\n");
+      const k = kb();
+      if (pr.acceptsNew) k.text(t(s, "btnPrepare"), "prep:" + pr.id).row();
+      k.text(t(s, s.q.fav.indexOf(pr.id) !== -1 ? "btnUnfav" : "btnFav"), "fav:" + pr.id)
+        .text(t(s, s.q.cmp.indexOf(pr.id) !== -1 ? "btnUncmp" : "btnCmp"), "cmp:" + pr.id).row();
+      if (s.q.cmp.length) k.text(t(s, "btnOpenCmp"), "go:compare").row();
+      k.text(t(s, "btnToResults"), "go:results").text(t(s, "btnMenu"), "go:menu");
+      return { text, kb: k };
+    },
+
+    compare: (s) => {
+      const list = s.q.cmp.map(profile).filter(Boolean);
+      const lines = [t(s, "cmpTitle"), ""];
+      const k = kb();
+      list.forEach((pr) => {
+        lines.push("<b>" + esc(pr.name) + "</b> — " + esc(dirLabel(s, pr.dir)));
+        lines.push(t(s, "lPrice") + ": " + priceLabel(s, pr));
+        lines.push(t(s, "lFormat") + ": " + esc(pr.formats.map((f) => t(s, f === "off" ? "fmtOff" : "fmtOn")).join(", ")));
+        lines.push(t(s, "lLangs") + ": " + esc(pr.langs.map((x) => t(s, x === "kk" ? "langKk" : "langRu")).join(", ")));
+        lines.push(t(s, "lCity") + ": " + esc(cityLabel(s, { id: pr.city })));
+        lines.push(t(s, "lAges") + ": " + esc(pr.ages.map((a) => lbl(s, AGES[a])).join(", ")));
+        lines.push("");
+        k.text(t(s, "btnPick", { name: pr.name }), "card:" + pr.id).text(t(s, "btnRemove", { name: pr.name }), "cmpx:" + pr.id).row();
+      });
+      if (list.length < 2) lines.push(t(s, "cmpOne"));
+      lines.push("<i>" + t(s, "demoMark") + "</i>");
+      k.text(t(s, "btnBackResults"), "go:results");
+      return { text: lines.join("\n"), kb: k };
+    },
+
+    reviewSpec: (s) => {
+      const pr = profile(s.ui.spec);
+      if (!pr) return { redirect: "results" };
+      const lines = [t(s, "reviewSpec"), ""].concat(specLines(s, pr).slice(0, -1).map(([k, v]) => k + ": <b>" + esc(v) + "</b>"));
+      lines.push("", t(s, "specPriceNote", { price: "" }) + priceLabel(s, pr));
+      lines.push("", "<i>" + t(s, "consentNote") + "</i>");
+      const k = kb().text(t(s, "btnSend"), "send:spec").row()
+        .text(t(s, "btnEdName"), "ed:name").text(t(s, "btnEdPhone2"), "ed:phone").row()
+        .text(t(s, "btnEdSearch"), "go:conditions").row()
+        .text(t(s, "btnBackSpec"), "card:" + pr.id);
+      return { text: lines.join("\n"), kb: k };
+    },
+
+    specMismatch: (s) => ({
+      text: t(s, "specMismatch"),
+      kb: kb().text(t(s, "btnToConditions"), "go:conditions").row().text(t(s, "btnOtherSpec"), "go:results")
+    }),
+
+    specAccepted: (s) => ({
+      text: t(s, "specAccepted"),
+      kb: kb().text(t(s, "btnOpenReq"), "rq:" + s.ui.req).row()
+        .text(t(s, "btnContinueSearch"), "search:cont").row()
+        .text(t(s, "btnMainMenu"), "go:menu")
+    }),
+
+    sendFail: (s) => ({
+      text: t(s, "sendFail"),
+      kb: kb().text(t(s, "btnRetry"), "send:" + (s.ui.retry || "support"))
+        .text(t(s, "btnReturn"), s.ui.retry === "spec" ? "go:reviewSpec" : "go:reviewSupport")
+    }),
+
+    reqs: async (s, ctx) => {
+      const list = await requests.list(ctx.chat.id);
+      const k = kb();
+      if (!list.length) {
+        k.text(t(s, "btnChooseNext"), "go:next").row().text(t(s, "btnMenu"), "go:menu");
+        return { text: t(s, "myReqsTitle") + "\n\n" + t(s, "myReqsEmpty"), kb: k };
+      }
+      list.slice(0, 10).forEach((r) => {
+        const label = reqLabel(s, r) + " — " + statusLabel(s, r.status);
+        k.text(label.length > 60 ? label.slice(0, 59) + "…" : label, "rq:" + r.id).row();
+      });
+      k.text(t(s, "btnMenu"), "go:menu");
+      return { text: t(s, "myReqsTitle"), kb: k };
+    },
+
+    req: async (s, ctx) => {
+      const r = await ownRequest(ctx, s.ui.req);
+      if (!r) return { redirect: "reqs" };
+      const lines = ["<b>" + esc(reqLabel(s, r)) + "</b>", t(s, "reqRecipient"),
+        t(s, "reqStatus", { status: statusLabel(s, r.status) }), t(s, "reqSent", { date: dateLabel(r.created_at) })];
+      if (r.status === "proposed" && r.proposal) lines.push("", t(s, "reqProposal", { when: r.proposal }));
+      if (r.status === "confirmed" && r.proposal) lines.push("", t(s, "reqMeeting", { when: r.proposal }));
+      if (r.status === "answered") lines.push("", r.answer ? t(s, "answerOther", { text: r.answer }) : t(s, "specReady"));
+      if (s.ui.info) {
+        lines.push("", "<i>" + t(s, "infoNote") + "</i>");
+        (r.snapshot.lines || []).forEach(([k, v]) => lines.push(esc(k) + ": " + esc(v)));
+      }
+      const k = kb().text(t(s, s.ui.info ? "btnHideInfo" : "btnShowInfo"), "rqi:" + r.id).row();
+      if (r.status === "proposed") k.text(t(s, "btnFits"), "rqok:" + r.id).text(t(s, "btnOtherTime"), "rqno:" + r.id).row();
+      if (r.status !== "cancelled") k.text(t(s, "btnCancelReq"), "rqc:" + r.id).row();
+      k.text(t(s, "btnMyReqs"), "go:reqs").text(t(s, "btnSearchSpecs"), "search:cont").row();
+      k.text(t(s, "btnMenu"), "go:menu");
+      return { text: lines.join("\n"), kb: k };
+    },
+
+    cancel: async (s, ctx) => {
+      const r = await ownRequest(ctx, s.ui.req);
+      if (!r) return { redirect: "reqs" };
+      if (r.status === "cancelled") return { redirect: "req" };
+      return { text: t(s, "cancelQ"), kb: kb().text(t(s, "btnYesCancel"), "rqy:" + r.id).text(t(s, "btnKeep"), "rq:" + r.id) };
+    },
+
+    menu: (s) => {
+      const k = kb().text(t(s, "btnSupport"), "go:supportIntro").row()
+        .text(t(s, "btnFindSpec"), "go:sections").row()
+        .text(t(s, "btnMyReqs"), "go:reqs").row()
+        .text(t(s, "btnSettings"), "go:settings").row();
+      const favs = s.q.fav.map(profile).filter(Boolean);
+      let text = t(s, "menuQ");
+      if (favs.length) {
+        text += "\n\n" + t(s, "favTitle");
+        favs.forEach((pr) => k.text("★ " + pr.name + " — " + dirLabel(s, pr.dir), "card:" + pr.id).row());
+      }
+      return { text, kb: k };
+    },
+
+    settings: (s) => {
+      const p = s.p;
+      const lines = [t(s, "settingsQ"), "",
+        t(s, "lName") + ": <b>" + esc(fullName(p) || t(s, "notSet")) + "</b>",
+        t(s, "lCity") + ": <b>" + esc(cityLabel(s, p.city)) + "</b>",
+        t(s, "lPhone") + ": <b>" + esc(p.phone || t(s, "notSet")) + "</b>",
+        t(s, "lAge") + ": <b>" + esc(ageLabel(s, p.age)) + "</b>",
+        t(s, "lTopic") + ": <b>" + esc(topicLabel(s, p.topic)) + "</b>"];
+      const k = pairs(kb(), [
+        [t(s, "btnEdName"), "ed:name"], [t(s, "btnEdPhone"), "ed:phone"],
+        [t(s, "btnEdCity"), "ed:city"], [t(s, "btnEdAge"), "ed:age"]
+      ]);
+      k.text(t(s, s.notify ? "btnNotifyOn" : "btnNotifyOff"), "notify").row();
+      k.text(t(s, "btnLangSwitch"), "langsw").row();
+      k.text(t(s, "btnMenu"), "go:menu");
+      return { text: lines.join("\n"), kb: k };
+    },
+
+    restart: (s) => ({
+      text: t(s, "restartQ"),
+      kb: kb().text(t(s, "btnRestartYes"), "restart:yes").row().text(t(s, "btnRestartNo"), "restart:no")
+    })
+  };
+
+  // Экраны, из которых редактируют отдельное поле (после ответа бот возвращается туда).
+  const RETURN_SCREENS = ["reviewSupport", "reviewSpec", "conditions", "settings", "supportIntro"];
+  const EDITABLE = ["name", "phone", "city", "age", "themes", "time", "sections", "clang", "fmt", "budget"];
+
+  // ---------- Сводки (они же — состав отправляемых данных) ----------
+  // view — язык, на котором показывается сводка; язык консультации — всегда язык интерфейса родителя (s).
+  function supportLines(s, view) {
+    const p = s.p;
+    const v = view || s;
+    const out = [[t(v, "lName"), fullName(p) || t(v, "notSet")], [t(v, "lCity"), cityLabel(v, p.city)],
+      [t(v, "lPhone"), p.phone || t(v, "notSet")]];
+    if (p.age !== null && p.age !== AGE_NONE) out.push([t(v, "lAge"), ageLabel(v, p.age)]);
+    out.push([t(v, "lTopic"), topicLabel(v, p.topic)], [t(v, "lConsultLang"), t(v, L(s) === "kk" ? "langKk" : "langRu")],
+      [t(v, "lTime"), p.time !== null && CONTACT_TIMES[p.time] ? lbl(v, CONTACT_TIMES[p.time]) : t(v, "notSet")]);
+    return out;
+  }
+
+  function conditionLines(s) {
+    const q = s.q;
+    const fmt = q.fmt !== null ? lbl(s, FORMATS[q.fmt]) : t(s, "notSet");
+    return [[t(s, "lDir"), dirLabel(s, q.dir)], [t(s, "lAge"), ageLabel(s, s.p.age)],
+      [t(s, "lClassLang"), q.clang !== null ? lbl(s, CLASS_LANGS[q.clang]) : t(s, "notSet")],
+      [t(s, "lFormatCity"), fmt + ", " + cityLabel(s, s.p.city)], [t(s, "lBudget"), budgetLabel(s, q.budget)]];
+  }
+
+  function specLines(s, pr, view) {
+    const p = s.p, q = s.q, v = view || s;
+    return [[t(v, "lSpecialist"), pr.name + " — " + dirLabel(v, pr.dir)], [t(v, "lName"), fullName(p) || t(v, "notSet")],
+      [t(v, "lCity"), cityLabel(v, p.city)], [t(v, "lPhone"), p.phone || t(v, "notSet")], [t(v, "lAge"), ageLabel(v, p.age)],
+      [t(v, "lClassLang"), q.clang !== null ? lbl(v, CLASS_LANGS[q.clang]) : t(v, "notSet")],
+      [t(v, "lFormat"), q.fmt !== null ? lbl(v, FORMATS[q.fmt]) : t(v, "notSet")], [t(v, "lBudget"), budgetLabel(v, q.budget)],
+      [t(v, "lPrice"), priceLabel(v, pr).replace(/&amp;/g, "&")]];
+  }
+
+  function reqLabel(s, r) {
+    if (r.kind === "specialist") return (r.snapshot.spec_name || "") + " — " + dirLabel(s, r.snapshot.spec_dir);
+    return TEXT[L(s)].reqSupportLabel.replace("{city}", r.snapshot.city || "");
+  }
+
+  async function ownRequest(ctx, id) {
+    if (!id) return null;
+    const r = await requests.get(id);
+    return r && String(r.chat_id) === String(ctx.chat.id) ? r : null;
+  }
+
+  // ---------- Сотрудники ----------
+  const isStaffChat = (ctx) => !!(staffChatId && ctx.chat && String(ctx.chat.id) === staffChatId);
+
+  async function notifyStaff(ctx, text, keyboard) {
+    if (!staffChatId) return false;
+    await ctx.api.sendMessage(staffChatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+    return true;
+  }
+
+  function staffCard(r, from) {
+    const ru = { lang: "ru" };
+    const title = r.kind === "support" ? "Психологическая поддержка" : "Обращение к специалисту";
+    const lines = ["<b>" + title + "</b> · " + statusLabel(ru, r.status), "#" + r.id.slice(0, 8)];
+    (r.snapshot.staff || []).forEach(([k, v]) => lines.push(esc(k) + ": " + esc(v)));
+    if (from) lines.push("Telegram: " + (from.username ? "@" + esc(from.username) : "без username") + ", id " + from.id);
+    return lines.join("\n");
+  }
+
+  function staffKeyboard(r) {
+    const k = kb();
+    if (r.status === "cancelled") return k;
+    if (r.kind === "support") k.text("Предложить время", "st:time:" + r.id);
+    else k.text("Специалист готов", "st:ready:" + r.id).row().text("Другой ответ", "st:ans:" + r.id);
+    return k;
+  }
+
+  // Уведомление родителю от имени сотрудника — на языке родителя; если уведомления выключены, статус виден в «Мои обращения».
+  async function pushUser(ctx, r, kind) {
+    const us = (await storage.read(String(r.chat_id))) || {};
+    if (us.notify === false) return;
+    const s = { lang: us.lang || r.snapshot.lang || "ru" };
+    let text;
+    const k = kb();
+    if (kind === "proposed") {
+      text = t(s, "proposal", { when: r.proposal });
+      k.text(t(s, "btnFits"), "rqok:" + r.id).text(t(s, "btnOtherTime"), "rqno:" + r.id).row();
+    } else {
+      text = r.answer ? t(s, "answerOther", { text: r.answer }) : t(s, "specReady");
+      k.text(t(s, "btnSearchSpecs"), "search:cont").row().text(t(s, "btnCancelReq"), "rqc:" + r.id).row();
+    }
+    k.text(t(s, "btnMyReqs"), "go:reqs");
+    text = "<b>" + esc(reqLabel(s, r)) + "</b>\n" + text;
+    await ctx.api.sendMessage(r.chat_id, text, { parse_mode: "HTML", reply_markup: k });
+  }
+
+  // ---------- Отправка обращения ----------
+  function buildSnapshot(s, kind, pr) {
+    // lines — на языке родителя (для «Какие сведения были включены»), staff — по-русски для сотрудника.
+    const ru = { lang: "ru" };
+    const lines = kind === "support" ? supportLines(s) : specLines(s, pr);
+    const staff = kind === "support" ? supportLines(s, ru) : specLines(s, pr, ru);
+    staff.push(["Язык интерфейса родителя", L(s) === "kk" ? "казахский" : "русский"]);
+    return {
+      lang: L(s), lines, staff,
+      city: cityLabel(s, s.p.city),
+      spec_id: pr ? pr.id : null, spec_name: pr ? pr.name : null, spec_dir: pr ? pr.dir : null
+    };
+  }
+
+  async function saveLeadCopy(ctx, s, r) {
+    if (!supabase) return;
+    const from = ctx.from || {};
+    const msg = ("Telegram-бот, " + (r.kind === "support" ? "психологическая поддержка" : "обращение к специалисту") + ": " +
+      r.snapshot.staff.map(([k, v]) => k + ": " + v).join("; ") +
+      "; обращение " + r.id + ", user_id " + from.id + ", username " + (from.username ? "@" + from.username : "не указан")).slice(0, 1000);
+    const res = await supabase.from("leads").insert({ name: fullName(s.p).slice(0, 100), contact: s.p.phone, message: msg });
+    if (res.error) throw new Error("leads insert: " + res.error.message);
+  }
+
+  async function submit(ctx, kind) {
+    const s = ctx.session;
+    const review = kind === "support" ? "reviewSupport" : "reviewSpec";
+    // Обязательные поля проверяются заново — в том числе в восстановленной старой сессии.
+    const miss = missingRequired(s);
+    if (miss) {
+      s.ret = review;
+      s.ui.err = t(s, "missingField");
+      return show(ctx, miss);
+    }
+    let pr = null;
+    if (kind === "support") {
+      if (s.p.time === null || !CONTACT_TIMES[s.p.time]) { s.ret = review; return show(ctx, "time"); }
+      if (!(s.p.city && s.p.city.id && SUPPORT_CITIES.indexOf(s.p.city.id) !== -1)) return show(ctx, "supportIntro");
+    } else {
+      pr = profile(s.ui.spec);
+      if (!pr) return show(ctx, "results");
+      if (missingCondition(s) || !pr.acceptsNew || !matches(pr, s)) return show(ctx, "specMismatch");
+    }
+
+    s.ui.retry = kind;
+    let r;
+    try {
+      // Повторная отправка того же активного обращения открывает существующее, а не создаёт дубль.
+      const list = await requests.list(ctx.chat.id);
+      const dup = list.find((x) => x.kind === (kind === "support" ? "support" : "specialist") && x.status !== "cancelled" &&
+        (kind === "support" || x.snapshot.spec_id === pr.id));
+      if (dup) { s.ui.req = dup.id; s.ui.info = false; return show(ctx, "req"); }
+      r = await requests.create({
+        chat_id: ctx.chat.id, kind: kind === "support" ? "support" : "specialist", status: "accepted",
+        snapshot: buildSnapshot(s, kind, pr)
+      });
+    } catch (err) {
+      logError("submit", err);
+      return show(ctx, "sendFail");
+    }
+    s.ui.req = r.id;
+    s.ui.retry = null;
+    try { await saveLeadCopy(ctx, s, r); } catch (err) { logError("leads", err); }
+    try { await notifyStaff(ctx, "Новое обращение\n" + staffCard(r, ctx.from), staffKeyboard(r)); } catch (err) { logError("notifyStaff", err); }
+    return show(ctx, kind === "support" ? "supportAccepted" : "specAccepted");
+  }
+
+  // ---------- Бот ----------
+  const bot = new deps.Bot(deps.token, deps.botConfig);
 
   bot.use(deps.session({
     initial: initialState,
-    storage: deps.storage,
-    getSessionKey: function (ctx) {
-      var u = ctx.update;
-      var chat = ctx.chat || (u.widget_query && u.widget_query.chat);
+    storage,
+    getSessionKey: (ctx) => {
+      const u = ctx.update;
+      const chat = ctx.chat || (u.widget_query && u.widget_query.chat);
       return chat ? String(chat.id) : undefined;
     }
   }));
 
-  // Закрываем «часики» на кнопке и сбрасываем ожидание текста: каждое нажатие кнопки начинает новый шаг.
-  bot.on("callback_query:data", async function (ctx, next) {
-    await ctx.answerCallbackQuery().catch(function () {});
-    if (ctx.chat) ctx.session.step = null;
+  // Старый формат сессии (до сценария mama.md) — начинаем заново.
+  bot.use(async (ctx, next) => {
+    const hasKey = ctx.chat || (ctx.update.widget_query && ctx.update.widget_query.chat);
+    if (hasKey && (!ctx.session || ctx.session.v !== SESSION_VERSION)) ctx.session = initialState();
     await next();
   });
 
-  // ----- Заявка: экран согласия (нужен и кнопке, и виджету) -----
-  function leadIntro() {
-    return {
-      text: "Чтобы передать заявку, нужно ваше согласие на обработку персональных данных.\n\n" +
-        "Имя и контакт используются только для связи с вами по этой заявке. " +
-        "Вместе с ними сохранятся ответы опроса (если вы его проходили), ваш Telegram id и username.\n\n" +
-        "Согласны?",
-      kb: new InlineKeyboard().text("Согласен(на)", "lead:yes").text("Отмена", "lead:cancel")
-    };
-  }
+  // Закрываем «часики» на кнопке (с всплывающим сообщением, если обработчик его оставил).
+  bot.on("callback_query:data", async (ctx, next) => {
+    try {
+      await next();
+    } finally {
+      await ctx.answerCallbackQuery(ctx.toast ? { text: ctx.toast, show_alert: true } : undefined).catch(() => {});
+    }
+  });
 
-  // Заявка из виджета: переносим ответы опроса в состояние диалога и начинаем заявку сообщением.
-  async function startLeadFromWidget(ctx, chatId, quiz) {
-    var s = ctx.session;
-    resetLead(s);
-    s.quiz = { step: 4, age: quiz.age, topics: quiz.topics, format: quiz.format, city: "", rec: quiz.rec, done: true };
-    var intro = leadIntro();
-    var sent = await ctx.api.sendMessage(chatId, intro.text, { reply_markup: intro.kb });
-    s.msgId = sent.message_id;
-  }
+  // id чата — чтобы настроить служебный чат сотрудников (STAFF_CHAT_ID).
+  bot.command("chatid", (ctx) => ctx.reply("chat id: " + ctx.chat.id));
 
+  // ----- Служебный чат сотрудников -----
+  bot.callbackQuery(/^st:(time|ready|ans):([\w-]+)$/, async (ctx) => {
+    if (!isStaffChat(ctx)) return;
+    const action = ctx.match[1];
+    const r = await requests.get(ctx.match[2]);
+    if (!r) { ctx.toast = "Обращение не найдено"; return; }
+    if (r.status === "cancelled") { ctx.toast = "Обращение отменено родителем"; return; }
+    if (action === "ready") {
+      const u = await requests.update(r.id, { status: "answered", answer: null });
+      await pushUser(ctx, u, "answered");
+      await ctx.editMessageText(staffCard(u) + "\n\n✅ Родителю отправлено: специалист готов обсудить встречу.", { parse_mode: "HTML" }).catch(() => {});
+      return;
+    }
+    const prompt = action === "time"
+      ? "Обращение #" + r.id.slice(0, 8) + ": напишите ответом на это сообщение дату и время встречи с часовым поясом."
+      : "Обращение #" + r.id.slice(0, 8) + ": напишите ответом на это сообщение ответ специалиста для родителя.";
+    const sent = await ctx.reply(prompt, {
+      reply_markup: { force_reply: true, input_field_placeholder: action === "time" ? "16 ноября, 11:00 (время Алматы)" : "Ответ специалиста" }
+    });
+    ctx.session.staff = { msg: sent.message_id, action, id: r.id };
+  });
+
+  bot.on("message:text", async (ctx, next) => {
+    const w = ctx.session && ctx.session.staff;
+    const reply = ctx.message.reply_to_message;
+    if (!isStaffChat(ctx) || !w || !reply || reply.message_id !== w.msg) return next();
+    const text = ctx.message.text.trim().slice(0, 300);
+    if (!text) return;
+    ctx.session.staff = null;
+    const r = await requests.get(w.id);
+    if (!r || r.status === "cancelled") return ctx.reply("Обращение отменено родителем — ответ не отправлен.");
+    const u = w.action === "time"
+      ? await requests.update(r.id, { status: "proposed", proposal: text })
+      : await requests.update(r.id, { status: "answered", answer: text });
+    await pushUser(ctx, u, u.status);
+    await ctx.reply("✅ Отправлено родителю.\n" + staffCard(u), { parse_mode: "HTML", reply_markup: staffKeyboard(u) });
+  });
+
+  // В группах (кроме служебного чата выше) бот молчит.
+  bot.use(async (ctx, next) => {
+    if (ctx.chat && ctx.chat.type !== "private") return;
+    await next();
+  });
+
+  // ----- Виджет (эксперимент, выключен флагом WIDGETS_ENABLED) -----
   if (deps.extend) {
     deps.extend(bot, {
-      AGES: AGES, TOPICS: TOPICS, FORMATS: FORMATS, SPECIALISTS: SPECIALISTS, DONT_KNOW: DONT_KNOW,
-      recommend: recommend, startLead: startLeadFromWidget, logError: logError
+      logError,
+      // Заявка из виджета: продолжаем обычный сценарий в чате (выбор языка или главное меню).
+      startLead: async (ctx, chatId) => {
+        ctx.session.msgId = null;
+        await show(ctx, ctx.session.lang ? "menu" : "lang", chatId);
+      }
     });
   }
 
-  bot.command(["start", "menu"], async function (ctx) {
-    var s = ctx.session;
-    resetLead(s);
-    s.quiz = null;
-    var sent = await ctx.reply(GREETING, { reply_markup: menuKeyboard() });
-    s.msgId = sent.message_id;
+  // ----- Команды -----
+  bot.command("start", (ctx) => {
+    const s = ctx.session;
+    s.msgId = null;
+    // После паузы открываем сохранённый шаг.
+    return show(ctx, s.lang ? s.screen || "menu" : "lang");
   });
 
-  bot.callbackQuery("menu", function (ctx) {
-    return render(ctx, GREETING, menuKeyboard());
+  bot.command("menu", (ctx) => {
+    const s = ctx.session;
+    s.msgId = null;
+    s.ret = null;
+    return show(ctx, "menu");
   });
 
-  // ----- Частые вопросы -----
-  function showFaqList(ctx) {
-    var kb = new InlineKeyboard();
-    FAQ.forEach(function (item, i) { kb.text(item.q, "faq:" + i).row(); });
-    kb.text("В меню", "menu");
-    return render(ctx, "Частые вопросы. Выберите, что интересует:", kb);
-  }
-
-  bot.callbackQuery("faq", showFaqList);
-
-  bot.callbackQuery(/^faq:(\d+)$/, function (ctx) {
-    var item = FAQ[Number(ctx.match[1])];
-    if (!item) return showFaqList(ctx);
-    var kb = new InlineKeyboard()
-      .text("← К вопросам", "faq").row()
-      .text("Оставить заявку", "lead:start").row()
-      .text("В меню", "menu");
-    return render(ctx, item.q + "\n\n" + item.a, kb);
+  bot.command("language", (ctx) => {
+    ctx.session.msgId = null;
+    ctx.session.ui.prev = ctx.session.screen;
+    ctx.session.lang = null;
+    return show(ctx, "lang");
   });
 
-  // ----- Опрос -----
-  async function showQuizStep(ctx) {
-    var s = ctx.session;
-    var q = s.quiz;
-    var kb = new InlineKeyboard();
-    var text;
+  bot.command("restart", (ctx) => {
+    const s = ctx.session;
+    s.msgId = null;
+    if (!s.lang) return show(ctx, "lang");
+    s.ui.prev = s.screen;
+    return show(ctx, "restart");
+  });
 
-    if (q.step === 1) {
-      text = "Шаг 1 из 4\n\nСколько лет ребёнку?";
-      AGES.forEach(function (a, i) {
-        kb.text(a.label, "quiz:age:" + i);
-        if (i % 2 === 1) kb.row();
-      });
-    } else if (q.step === 2) {
-      text = "Шаг 2 из 4\n\nС чем нужна помощь? Выберите всё подходящее" + (q.topics.length ? " и нажмите «Далее»." : ".");
-      TOPICS.forEach(function (t, i) {
-        kb.text((q.topics.indexOf(i) !== -1 ? "✅ " : "") + t.label, "quiz:topic:" + i).row();
-      });
-      if (q.topics.length) kb.text("Далее →", "quiz:topics:done").row();
-    } else if (q.step === 3) {
-      text = "Шаг 3 из 4\n\nКакой формат занятий удобнее?";
-      FORMATS.forEach(function (f, i) { kb.text(f.label, "quiz:format:" + i); });
-      kb.row();
+  bot.callbackQuery(/^restart:(yes|no)$/, async (ctx) => {
+    const s = ctx.session;
+    if (ctx.match[1] === "yes") {
+      const msgId = s.msgId;
+      ctx.session = initialState();
+      ctx.session.msgId = msgId;
+      return show(ctx, "lang");
+    }
+    return show(ctx, s.ui.prev || "menu");
+  });
+
+  // ----- Навигация -----
+  bot.callbackQuery(/^go:(\w+)$/, (ctx) => {
+    const s = ctx.session;
+    const name = ctx.match[1];
+    if (name === s.ret || name === "menu") s.ret = null;
+    return show(ctx, name);
+  });
+
+  // Редактирование одного поля из сводки, условий или настроек.
+  bot.callbackQuery(/^ed:(\w+)$/, (ctx) => {
+    const s = ctx.session;
+    const field = ctx.match[1];
+    if (EDITABLE.indexOf(field) === -1) return show(ctx, s.screen);
+    if (RETURN_SCREENS.indexOf(s.screen) !== -1) s.ret = s.screen;
+    if (field === "budget") s.ui.tmpBudget = null;
+    if (field === "name") s.ui.pendingFirst = null;
+    return show(ctx, field);
+  });
+
+  bot.callbackQuery(/^lang:(ru|kk)$/, (ctx) => {
+    const s = ctx.session;
+    const first = !s.p.first && !s.p.city;
+    s.lang = ctx.match[1];
+    if (first) return show(ctx, "welcome");
+    const prev = s.ui.prev;
+    s.ui.prev = null;
+    return show(ctx, prev && prev !== "lang" ? prev : "menu");
+  });
+
+  bot.callbackQuery("langsw", (ctx) => {
+    ctx.session.lang = ctx.session.lang === "kk" ? "ru" : "kk";
+    return show(ctx, "settings");
+  });
+
+  bot.callbackQuery("notify", (ctx) => {
+    ctx.session.notify = !ctx.session.notify;
+    return show(ctx, "settings");
+  });
+
+  // ----- Анкета -----
+  bot.callbackQuery(/^city:(\d+)$/, (ctx) => {
+    const c = CITIES[Number(ctx.match[1])];
+    if (!c) return show(ctx, "city");
+    ctx.session.p.city = { id: c.id };
+    return advance(ctx, "name");
+  });
+  bot.callbackQuery("city:other", (ctx) => show(ctx, "cityOther"));
+  bot.callbackQuery("city:ok", (ctx) => advance(ctx, "name"));
+
+  bot.callbackQuery(/^age:(\d+)$/, (ctx) => {
+    const i = Number(ctx.match[1]);
+    if (!AGES[i]) return show(ctx, "age");
+    ctx.session.p.age = i;
+    return advance(ctx, "themes");
+  });
+
+  bot.callbackQuery(/^theme:(\d+)$/, (ctx) => {
+    const i = Number(ctx.match[1]);
+    if (!THEMES[i]) return show(ctx, "themes");
+    ctx.session.ui.theme = i;
+    return show(ctx, "topics");
+  });
+
+  bot.callbackQuery(/^topic:(\d+)$/, (ctx) => {
+    const s = ctx.session;
+    const key = s.ui.theme + ":" + ctx.match[1];
+    if (!topicOf(key)) return show(ctx, "themes");
+    s.p.topic = key;
+    return advance(ctx, "next");
+  });
+
+  bot.callbackQuery(/^time:(\d+)$/, (ctx) => {
+    const i = Number(ctx.match[1]);
+    if (!CONTACT_TIMES[i]) return show(ctx, "time");
+    ctx.session.p.time = i;
+    return advance(ctx, "reviewSupport");
+  });
+
+  // ----- Поиск -----
+  bot.callbackQuery(/^sec:(\d+)$/, (ctx) => {
+    const i = Number(ctx.match[1]);
+    if (!SECTIONS[i]) return show(ctx, "sections");
+    ctx.session.ui.sec = i;
+    return show(ctx, "dirs");
+  });
+
+  bot.callbackQuery(/^dir:(\d+)$/, (ctx) => {
+    const s = ctx.session;
+    const key = s.ui.sec + ":" + ctx.match[1];
+    if (!dirOf(key)) return show(ctx, "sections");
+    if (s.q.dir !== key) { s.q.cmp = []; s.q.idx = 0; } // сравнение очищается при смене направления
+    s.q.dir = key;
+    return advance(ctx, "clang");
+  });
+
+  bot.callbackQuery(/^clang:(\d+)$/, (ctx) => {
+    const i = Number(ctx.match[1]);
+    if (!CLASS_LANGS[i]) return show(ctx, "clang");
+    ctx.session.q.clang = i;
+    return advance(ctx, "fmt");
+  });
+
+  bot.callbackQuery(/^fmt:(\d+)$/, (ctx) => {
+    const i = Number(ctx.match[1]);
+    if (!FORMATS[i]) return show(ctx, "fmt");
+    ctx.session.q.fmt = i;
+    return advance(ctx, "budget");
+  });
+
+  // «Посмотреть онлайн»: меняется только формат, остальные условия сохраняются.
+  bot.callbackQuery("fmt:online", (ctx) => {
+    ctx.session.q.fmt = FORMATS.findIndex((f) => f.id === "on");
+    ctx.session.ret = null;
+    return show(ctx, "conditions");
+  });
+
+  bot.callbackQuery(/^bud:(\d+|custom)$/, (ctx) => {
+    const s = ctx.session;
+    if (ctx.match[1] === "custom") {
+      if (s.ui.tmpBudget === null || s.ui.tmpBudget === undefined) return show(ctx, "budget");
+      s.q.budget = s.ui.tmpBudget;
     } else {
-      text = "Шаг 4 из 4\n\nВ каком вы городе? Напишите ответ сообщением.";
-      kb.text("Пропустить", "quiz:city:skip").row();
-      s.step = "city";
+      const i = Number(ctx.match[1]);
+      if (BUDGETS[i] === undefined) return show(ctx, "budget");
+      s.q.budget = BUDGETS[i];
     }
-
-    if (q.step > 1) kb.text("← Назад", "quiz:back");
-    kb.text("В меню", "menu");
-    return render(ctx, text, kb);
-  }
-
-  async function finishQuiz(ctx) {
-    var s = ctx.session;
-    var q = s.quiz;
-    // Если состояние потерялось — начинаем опрос заново
-    if (!q || q.age === null || !q.topics.length || q.format === null) {
-      s.quiz = newQuiz();
-      return showQuizStep(ctx);
-    }
-
-    var rec = recommend(q.topics);
-    q.rec = rec.keys.map(function (k) { return SPECIALISTS[k].name; });
-    q.done = true;
-    s.step = null;
-
-    var lines = ["Вам может подойти: " + q.rec.join(" или "), ""];
-    rec.keys.forEach(function (k) { lines.push("• " + SPECIALISTS[k].name + " — " + SPECIALISTS[k].desc); });
-    lines.push("");
-    lines.push(q.topics.indexOf(DONT_KNOW) !== -1
-      ? "Вы не знаете, с чего начать, — предлагаем начать с дефектолога как с общего ориентира."
-      : "Подобрано по вашему запросу: " + topicsText(q) + ".");
-    if (rec.cut) lines.push("Запросов несколько, поэтому показаны два самых близких типа специалистов — остальное можно обсудить при подборе.");
-    lines.push("Возраст: " + AGES[q.age].value + " · формат: " + FORMATS[q.format].value + " · город: " + (q.city || "не указан"));
-    lines.push("");
-    lines.push("Это не медицинская рекомендация.");
-
-    var kb = new InlineKeyboard()
-      .text("Оставить заявку", "lead:start").row()
-      .text("Пройти заново", "quiz:start").row()
-      .text("В меню", "menu");
-    return render(ctx, lines.join("\n"), kb);
-  }
-
-  // Обёртка: если опроса в состоянии нет (старая кнопка), начинаем с первого шага.
-  function withQuiz(handler) {
-    return function (ctx) {
-      var s = ctx.session;
-      if (!s.quiz) {
-        s.quiz = newQuiz();
-        return showQuizStep(ctx);
-      }
-      return handler(ctx, s, s.quiz);
-    };
-  }
-
-  bot.callbackQuery("quiz:start", function (ctx) {
-    ctx.session.quiz = newQuiz();
-    return showQuizStep(ctx);
+    s.ui.tmpBudget = null;
+    return advance(ctx, "conditions");
   });
 
-  bot.callbackQuery(/^quiz:age:(\d+)$/, withQuiz(function (ctx, s, q) {
-    var i = Number(ctx.match[1]);
-    if (AGES[i]) { q.age = i; q.step = 2; }
-    return showQuizStep(ctx);
-  }));
-
-  bot.callbackQuery(/^quiz:topic:(\d+)$/, withQuiz(function (ctx, s, q) {
-    var i = Number(ctx.match[1]);
-    if (TOPICS[i]) {
-      var at = q.topics.indexOf(i);
-      if (at !== -1) q.topics.splice(at, 1);
-      else if (i === DONT_KNOW) q.topics = [i]; // «Не знаю» исключает остальные варианты
-      else q.topics = q.topics.filter(function (t) { return t !== DONT_KNOW; }).concat(i);
-      q.topics.sort(function (a, b) { return a - b; });
+  bot.callbackQuery(/^res:(show|\d+)$/, (ctx) => {
+    const s = ctx.session;
+    if (ctx.match[1] === "show") {
+      s.ret = null;
+      s.q.idx = 0;
+      const miss = missingCondition(s);
+      if (miss) return show(ctx, miss);
+    } else {
+      s.q.idx = Number(ctx.match[1]);
     }
-    return showQuizStep(ctx);
-  }));
-
-  bot.callbackQuery("quiz:topics:done", withQuiz(function (ctx, s, q) {
-    if (q.topics.length) q.step = 3;
-    return showQuizStep(ctx);
-  }));
-
-  bot.callbackQuery(/^quiz:format:(\d+)$/, withQuiz(function (ctx, s, q) {
-    var i = Number(ctx.match[1]);
-    if (FORMATS[i]) { q.format = i; q.step = 4; }
-    return showQuizStep(ctx);
-  }));
-
-  bot.callbackQuery("quiz:city:skip", withQuiz(function (ctx, s, q) {
-    q.city = "";
-    return finishQuiz(ctx);
-  }));
-
-  bot.callbackQuery("quiz:back", withQuiz(function (ctx, s, q) {
-    q.step = Math.max(1, q.step - 1);
-    return showQuizStep(ctx);
-  }));
-
-  // ----- Заявка -----
-  var cancelKeyboard = function () { return new InlineKeyboard().text("Отмена", "lead:cancel"); };
-
-  bot.callbackQuery("lead:start", function (ctx) {
-    resetLead(ctx.session);
-    var intro = leadIntro();
-    return render(ctx, intro.text, intro.kb);
+    return show(ctx, "results");
   });
 
-  bot.callbackQuery("lead:yes", function (ctx) {
-    var s = ctx.session;
-    s.consent = true;
-    s.step = "name";
-    return render(ctx, "Спасибо! Как вас зовут?", cancelKeyboard());
+  bot.callbackQuery("search:cont", (ctx) => {
+    const s = ctx.session;
+    s.ret = null;
+    const miss = missingCondition(s);
+    return show(ctx, !miss ? "results" : miss === "sections" ? "sections" : "conditions");
   });
 
-  bot.callbackQuery("lead:cancel", function (ctx) {
-    resetLead(ctx.session);
-    return render(ctx, "Хорошо, заявку не отправляем.\n\n" + GREETING, menuKeyboard());
+  bot.callbackQuery(/^card:(\w+)$/, (ctx) => {
+    if (!profile(ctx.match[1])) return show(ctx, "results");
+    ctx.session.ui.spec = ctx.match[1];
+    return show(ctx, "profile");
   });
 
-  function leadMessage(ctx, s) {
-    var q = s.quiz;
-    var parts = [];
-    if (q && q.done) {
-      parts.push("возраст " + AGES[q.age].value);
-      parts.push("запрос: " + topicsText(q));
-      parts.push("формат: " + FORMATS[q.format].value);
-      parts.push("город: " + (q.city || "не указан"));
-      parts.push("рекомендовано: " + q.rec.join(" или "));
+  bot.callbackQuery(/^fav:(\w+)$/, (ctx) => {
+    const s = ctx.session;
+    const id = ctx.match[1];
+    if (profile(id)) {
+      const at = s.q.fav.indexOf(id);
+      if (at !== -1) s.q.fav.splice(at, 1); else s.q.fav.push(id);
     }
-    parts.push("user_id " + ctx.from.id);
-    parts.push("username " + (ctx.from.username ? "@" + ctx.from.username : "не указан"));
-    return ("Telegram-бот: " + parts.join(", ")).slice(0, 1000); // лимит поля message в БД
+    return show(ctx, s.screen);
+  });
+
+  bot.callbackQuery(/^cmp:(\w+)$/, (ctx) => {
+    const s = ctx.session;
+    const id = ctx.match[1];
+    if (profile(id)) {
+      const at = s.q.cmp.indexOf(id);
+      if (at !== -1) s.q.cmp.splice(at, 1);
+      else if (s.q.cmp.length >= 2) ctx.toast = t(s, "cmpFull").replace(/<[^>]+>/g, "");
+      else s.q.cmp.push(id);
+    }
+    return show(ctx, s.screen);
+  });
+
+  bot.callbackQuery(/^cmpx:(\w+)$/, (ctx) => {
+    const s = ctx.session;
+    s.q.cmp = s.q.cmp.filter((x) => x !== ctx.match[1]); // избранное не трогаем
+    return show(ctx, "compare");
+  });
+
+  bot.callbackQuery(/^prep:(\w+)$/, (ctx) => {
+    const pr = profile(ctx.match[1]);
+    if (!pr) return show(ctx, "results");
+    ctx.session.ui.spec = pr.id;
+    ctx.session.ret = null;
+    return show(ctx, "reviewSpec");
+  });
+
+  bot.callbackQuery(/^send:(support|spec)$/, (ctx) => submit(ctx, ctx.match[1]));
+
+  // ----- Мои обращения -----
+  bot.callbackQuery(/^rq:([\w-]+)$/, (ctx) => {
+    ctx.session.ui.req = ctx.match[1];
+    ctx.session.ui.info = false;
+    return show(ctx, "req");
+  });
+
+  bot.callbackQuery(/^rqi:([\w-]+)$/, (ctx) => {
+    const s = ctx.session;
+    s.ui.info = s.ui.req === ctx.match[1] ? !s.ui.info : true;
+    s.ui.req = ctx.match[1];
+    return show(ctx, "req");
+  });
+
+  bot.callbackQuery(/^rqc:([\w-]+)$/, (ctx) => {
+    ctx.session.ui.req = ctx.match[1];
+    return show(ctx, "cancel");
+  });
+
+  bot.callbackQuery(/^rqy:([\w-]+)$/, async (ctx) => {
+    const s = ctx.session;
+    s.ui.req = ctx.match[1];
+    s.ui.info = false;
+    const r = await ownRequest(ctx, s.ui.req);
+    if (!r) return show(ctx, "reqs");
+    if (r.status === "cancelled") return show(ctx, "req"); // повторная отмена ничего не меняет
+    const u = Object.assign({}, r, { status: "cancelled" });
+    // Отмена подтверждённой встречи завершается, только когда дошла до сотрудника.
+    try {
+      await notifyStaff(ctx, "Родитель отменил обращение\n" + staffCard(u, ctx.from), undefined);
+    } catch (err) {
+      logError("notifyStaff", err);
+      if (r.status === "confirmed") { s.ui.err = t(s, "cancelFail"); return show(ctx, "req"); }
+    }
+    await requests.update(r.id, { status: "cancelled" });
+    s.ui.flash = t(s, "cancelled");
+    return show(ctx, "req");
+  });
+
+  bot.callbackQuery(/^rq(ok|no):([\w-]+)$/, async (ctx) => {
+    const s = ctx.session;
+    s.ui.req = ctx.match[2];
+    s.ui.info = false;
+    const r = await ownRequest(ctx, s.ui.req);
+    if (!r) return show(ctx, "reqs");
+    if (r.status !== "proposed") return show(ctx, "req");
+    let u;
+    if (ctx.match[1] === "ok") {
+      u = await requests.update(r.id, { status: "confirmed" });
+      s.ui.flash = t(s, "confirmed", { when: r.proposal });
+    } else {
+      u = await requests.update(r.id, { status: "accepted", proposal: null });
+      s.ui.flash = t(s, "otherTimeAck");
+    }
+    try {
+      await notifyStaff(ctx, (ctx.match[1] === "ok" ? "Родитель подтвердил время" : "Родителю нужно другое время") +
+        "\n" + staffCard(u, ctx.from), staffKeyboard(u));
+    } catch (err) { logError("notifyStaff", err); }
+    return show(ctx, "req");
+  });
+
+  // ----- Ввод текстом: город, имя и фамилия, телефон, своя сумма -----
+  async function onPhone(ctx, raw) {
+    const s = ctx.session;
+    const v = String(raw).trim();
+    const digits = v.replace(/\D/g, "");
+    if (!/^\+?[\d\s()-]+$/.test(v) || digits.length < 10 || digits.length > 15) {
+      s.ui.err = t(s, "phoneErr") + "\n" + t(s, "youEntered", { v: v.slice(0, 40) });
+      return show(ctx, "phone");
+    }
+    s.p.phone = (v.charAt(0) === "+" ? "+" : "") + digits;
+    return advance(ctx, "age");
   }
 
-  async function saveLead(ctx, s) {
-    if (!supabase) throw new Error("Supabase не настроен (SUPABASE_URL и ключ)");
-    var res = await supabase.from("leads").insert({
-      name: s.lead.name,
-      contact: s.lead.contact,
-      message: leadMessage(ctx, s)
-    });
-    if (res.error) throw new Error("Supabase insert: " + res.error.message);
-  }
+  bot.on("message:contact", async (ctx) => {
+    const s = ctx.session;
+    await ctx.deleteMessage().catch(() => {});
+    if (s.screen !== "phone") return;
+    return onPhone(ctx, ctx.message.contact.phone_number);
+  });
 
-  // ----- Текстовые сообщения: города, имени и контакта -----
-  bot.on("message:text", async function (ctx) {
-    var s = ctx.session;
-    var text = ctx.message.text.trim();
+  bot.on("message:text", async (ctx) => {
+    const s = ctx.session;
+    const text = ctx.message.text.trim();
+    if (text.charAt(0) === "/" || !s.lang) {
+      s.msgId = null;
+      return show(ctx, s.lang ? "menu" : "lang");
+    }
+    const screen = s.screen;
 
-    if (s.step === "city" && s.quiz) {
-      s.quiz.city = text.slice(0, 60);
-      await removeUserMessage(ctx);
-      return finishQuiz(ctx);
+    if (screen === "cityOther") {
+      await ctx.deleteMessage().catch(() => {});
+      if (text.length < 2 || text.length > 60) { s.ui.err = t(s, "cityOtherErr"); return show(ctx, "cityOther"); }
+      s.p.city = { name: text };
+      return show(ctx, "cityOnline");
     }
 
-    if (s.step === "name") {
-      await removeUserMessage(ctx);
-      if (!text || text.length > 100) {
-        return render(ctx, "Имя должно быть от 1 до 100 символов. Как вас зовут?", cancelKeyboard());
-      }
-      s.lead.name = text;
-      s.step = "contact";
-      return render(ctx, "Приятно познакомиться, " + text + "!\nОставьте контакт для связи — телефон или Telegram (например, +7 … или @username).", cancelKeyboard());
+    if (screen === "name") {
+      await ctx.deleteMessage().catch(() => {});
+      const parts = text.split(/\s+/).filter(Boolean);
+      let first, last;
+      if (s.ui.pendingFirst && parts.length === 1) { first = s.ui.pendingFirst; last = parts[0]; }
+      else { first = parts[0] || ""; last = parts.slice(1).join(" "); }
+      if (!first) { s.ui.err = t(s, "nameErrFirst"); return show(ctx, "name"); }
+      const okChars = [first].concat(last ? last.split(" ") : []).every((w) => NAME_RE.test(w) && w.length <= 50);
+      if (!okChars || (first + " " + last).length > 100) { s.ui.pendingFirst = null; s.ui.err = t(s, "nameErrChars"); return show(ctx, "name"); }
+      if (!last) { s.ui.pendingFirst = first; s.ui.err = t(s, "nameErrLast"); return show(ctx, "name"); }
+      s.p.first = first;
+      s.p.last = last;
+      s.ui.pendingFirst = null;
+      return advance(ctx, "phone");
     }
 
-    if (s.step === "contact") {
-      await removeUserMessage(ctx);
-      if (text.length < 3 || text.length > 150) {
-        return render(ctx, "Контакт должен быть от 3 до 150 символов. Оставьте телефон или Telegram.", cancelKeyboard());
-      }
-      s.lead.contact = text;
-      await saveLead(ctx, s);
-      resetLead(s);
-      s.quiz = null;
-      return render(ctx, "Спасибо, мы свяжемся с вами 💛", new InlineKeyboard().text("В меню", "menu"));
+    if (screen === "phone") {
+      await ctx.deleteMessage().catch(() => {});
+      return onPhone(ctx, text);
     }
 
-    // Бот не ждёт текста: подсказываем меню (в группах молчим)
-    if (ctx.chat.type !== "private") return;
-    var sent = await ctx.reply(text.charAt(0) === "/" ? "Не знаю такой команды. Вот что я умею:" : "Выберите действие в меню:", {
-      reply_markup: menuKeyboard()
-    });
-    s.msgId = sent.message_id;
+    if (screen === "budget") {
+      await ctx.deleteMessage().catch(() => {});
+      const v = text.replace(/[\s ₸тг.]/gi, "");
+      const n = /^\d+$/.test(v) ? Number(v) : NaN;
+      if (!(n >= 0 && n <= BUDGET_MAX)) { s.ui.tmpBudget = null; s.ui.err = t(s, "budgetErr"); return show(ctx, "budget"); }
+      s.ui.tmpBudget = n;
+      return show(ctx, "budget");
+    }
+
+    // Бот не ждёт текста: показываем текущий шаг заново внизу чата.
+    s.msgId = null;
+    s.ui.err = t(s, "pickButton");
+    return show(ctx, screen || "menu");
   });
 
   // ----- Ошибки -----
-  // Изменения сессии в упавшем апдейте не сохраняются: следующее сообщение начнётся с прежнего состояния.
-  bot.catch(async function (err) {
+  // Изменения сессии в упавшем апдейте не сохраняются: ответы остаются прежними.
+  bot.catch(async (err) => {
     logError("bot", err.error || err);
-    var ctx = err.ctx;
+    const ctx = err.ctx;
     try {
-      if (ctx && ctx.chat) {
-        await ctx.api.sendMessage(ctx.chat.id, GENERIC_ERROR, {
-          reply_markup: new InlineKeyboard().text("В меню", "menu")
+      if (ctx && ctx.chat && ctx.chat.type === "private") {
+        const s = { lang: ctx.session && ctx.session.lang };
+        await ctx.api.sendMessage(ctx.chat.id, t(s, "genericError"), {
+          reply_markup: kb().text(t(s, "btnMenu"), "go:menu")
         });
       }
     } catch (e) {

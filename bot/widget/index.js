@@ -20,8 +20,9 @@ const UPDATE_TYPES = ["widget_query", "shared_widget_query"];
 const CAPTION = "Подбор специалиста Mama Pro. Если виджет не отображается, нажмите /start.";
 const FAIL = "Что-то пошло не так, попробуйте ещё раз";
 
-function setupWidgets(bot, d) {
-  // d: { AGES, TOPICS, FORMATS, SPECIALISTS, DONT_KNOW, recommend, startLead, logError }
+function setupWidgets(bot, core) {
+  // core: { startLead, logError } из бота; данные опроса — свои (quiz-data.js).
+  var d = Object.assign({}, require("./quiz-data"), core);
   var labels = {
     a: d.AGES.map(function (x) { return x.label; }),
     t: d.TOPICS.map(function (x) { return x.label; }),

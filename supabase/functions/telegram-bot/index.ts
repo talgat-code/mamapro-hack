@@ -1,15 +1,17 @@
 // Прод-запуск Telegram-бота Mama Pro: Supabase Edge Function, Telegram присылает апдейты webhook'ом.
 // Логика — ../_shared/bot.mjs (та же, что у локального bot/index.js).
-// Секреты функции: BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET. SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY Supabase задаёт сам.
+// Секреты функции: BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET; необязательный STAFF_CHAT_ID — служебный чат сотрудников
+// (туда приходят обращения с кнопками ответа). SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY Supabase задаёт сам.
 // Деплой и установка webhook — DEPLOY.md («Telegram-бот»).
 import { Bot, InlineKeyboard, session, webhookCallback } from "npm:grammy@1.46.0";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { createBot, supabaseSessionStorage } from "../_shared/bot.mjs";
+import { createBot, supabaseRequestStore, supabaseSessionStorage } from "../_shared/bot.mjs";
 
 const token = Deno.env.get("BOT_TOKEN") ?? "";
 const secret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const sbUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const staffChatId = Deno.env.get("STAFF_CHAT_ID") ?? "";
 
 function redact(text: string): string {
   let out = String(text);
@@ -26,11 +28,13 @@ const missing = [["BOT_TOKEN", token], ["TELEGRAM_WEBHOOK_SECRET", secret], ["SU
 
 let handle: ((req: Request) => Promise<Response>) | null = null;
 if (missing.length === 0) {
-  // service_role: заявки (leads) и состояние диалога (bot_sessions) пишутся в обход RLS, только с сервера.
+  // service_role: обращения (bot_requests, копия в leads) и состояние диалога (bot_sessions) — в обход RLS, только с сервера.
   const supabase = createClient(sbUrl, sbKey, { auth: { persistSession: false } });
   const bot = createBot({
     Bot, InlineKeyboard, session, token, supabase, logError,
     storage: supabaseSessionStorage(supabase),
+    requests: supabaseRequestStore(supabase),
+    staffChatId,
   });
   // secretToken: апдейт без заголовка X-Telegram-Bot-Api-Secret-Token с этим значением отклоняется (401).
   handle = webhookCallback(bot, "std/http", { secretToken: secret });

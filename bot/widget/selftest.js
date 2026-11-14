@@ -82,7 +82,7 @@ async function check(name, fn) {
     await check("без флага /widget — неизвестная команда", async function () {
       var cs = await run(msg("/widget"));
       assert.deepStrictEqual(cs.map(function (c) { return c.method; }), ["sendMessage"]);
-      assert(/Не знаю такой команды/.test(cs[0].payload.text));
+      assert(/Қай тіл|Чем помочь дальше/.test(cs[0].payload.text)); // неизвестная команда → выбор языка или меню
     });
     await check("без флага widget_query игнорируется", async function () {
       var cs = await run(wq("a:1|1,,,"));
@@ -110,7 +110,7 @@ async function check(name, fn) {
     await check("/start по-прежнему работает", async function () {
       var cs = await run(msg("/start"));
       assert.strictEqual(cs[0].method, "sendMessage");
-      assert(/помощник Mama Pro/.test(cs[0].payload.text));
+      assert(/Қай тіл/.test(cs[0].payload.text)); // сценарий mama.md начинается с выбора языка
     });
 
     var flow = [
@@ -162,15 +162,11 @@ async function check(name, fn) {
       assert.strictEqual(JSON.parse(editOf(cs).payload.public_data).r, undefined);
     });
 
-    await check("заявка из виджета → обычное сообщение с согласием, ответы опроса сохранены", async function () {
+    await check("заявка из виджета → сообщение в чате, дальше обычный сценарий бота", async function () {
       var cs = await run(wq("l|4,2,12,0"));
       var sm = cs.filter(function (c) { return c.method === "sendMessage"; })[0];
-      assert(sm && /согласие/.test(sm.payload.text), "нет сообщения о согласии");
+      assert(sm && /Қай тіл|Чем помочь дальше/.test(sm.payload.text), "нет сообщения в чате");
       assert(answerOf(cs).m);
-      // дальше — обычный поток заявки кнопкой «Согласен(на)»
-      var cb = await run({ update_id: uid++, callback_query: { id: "cb1", from: ME, chat_instance: "ci", data: "lead:yes",
-        message: { message_id: sm ? 999 : 0, chat: CHAT, date: 0, from: bot.botInfo, text: "x" } } });
-      assert(cb.some(function (c) { return (c.method === "editMessageText" || c.method === "sendMessage") && /Как вас зовут/.test(c.payload.text); }));
     });
 
     await check("заявка до конца опроса → ошибка", async function () {

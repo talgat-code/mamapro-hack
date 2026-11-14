@@ -1,6 +1,6 @@
 "use strict";
 
-// Локальный запуск Telegram-бота Mama Pro: long polling, состояние диалога в памяти.
+// Локальный запуск Telegram-бота Mama Pro: long polling, состояние диалога и обращения в памяти.
 // Логика бота — supabase/functions/_shared/bot.mjs; в проде она же работает как Supabase Edge Function (webhook).
 //
 //   node index.js                     — с .env в корне репозитория
@@ -14,7 +14,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ENV_FILE) });
 const { Bot, InlineKeyboard, session, API_CONSTANTS } = require("grammy");
 const { createClient } = require("@supabase/supabase-js");
 
-const { BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY, BOT_API_BASE, BOT_TEST_ENV } = process.env;
+const { BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY, BOT_API_BASE, BOT_TEST_ENV, STAFF_CHAT_ID } = process.env;
 // Эксперимент с виджетами (bot/widget): выключен, пока не задано WIDGETS_ENABLED=1.
 const WIDGETS_ENABLED = process.env.WIDGETS_ENABLED === "1";
 const FORCE_POLLING = process.argv.indexOf("--force-polling") !== -1;
@@ -27,7 +27,7 @@ if (!BOT_TOKEN) {
 const supabase = SUPABASE_URL && SUPABASE_ANON_KEY
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } })
   : null;
-if (!supabase) console.warn("SUPABASE_URL / SUPABASE_ANON_KEY не заданы — заявки сохраняться не будут.");
+if (!supabase) console.warn("SUPABASE_URL / SUPABASE_ANON_KEY не заданы — копии обращений в leads сохраняться не будут.");
 
 // ---------- Логирование без секретов ----------
 function redact(text) {
@@ -55,6 +55,7 @@ async function main() {
     token: BOT_TOKEN,
     botConfig: Object.keys(clientConfig).length ? { client: clientConfig } : undefined,
     supabase: supabase,
+    staffChatId: STAFF_CHAT_ID,
     logError: logError,
     extend: WIDGETS_ENABLED ? function (b, d) { require("./widget").setupWidgets(b, d); } : null
   });

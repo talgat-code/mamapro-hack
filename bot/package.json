@@ -2,7 +2,7 @@
   "name": "mama-pro-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Telegram-бот Mama Pro: подбор типа специалиста, FAQ и заявка (демо хакатона)",
+  "description": "Telegram-бот Mama Pro: психологическая поддержка и поиск специалиста по сценарию mama.md (демо хакатона)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

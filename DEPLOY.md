@@ -19,10 +19,15 @@
 
 ## Telegram-бот (Supabase Edge Function)
 Прод: функция `supabase/functions/telegram-bot`, Telegram присылает апдейты webhook'ом. Логика бота —
-`supabase/functions/_shared/bot.mjs`, состояние диалога — таблица `public.bot_sessions` (только service_role).
+`supabase/functions/_shared/bot.mjs` (сценарий — `mama.md`, тексты RU/KZ — `_shared/catalog.mjs`), состояние диалога —
+таблица `public.bot_sessions`, обращения — `public.bot_requests` (копия — в `leads`); обе таблицы только для service_role.
 Значения ниже — из локального `.env` (`BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`).
-1. `npx supabase login`, `npx supabase link --project-ref <ref>`, `npx supabase db push` (миграция `bot_sessions`).
-2. `npx supabase secrets set BOT_TOKEN=<токен> TELEGRAM_WEBHOOK_SECRET=<секрет>`.
+1. `npx supabase login`, `npx supabase link --project-ref <ref>`, `npx supabase db push` (миграции `bot_sessions`, `bot_requests`).
+2. `npx supabase secrets set BOT_TOKEN=<токен> TELEGRAM_WEBHOOK_SECRET=<секрет> STAFF_CHAT_ID=<id>`.
+   `STAFF_CHAT_ID` — служебный чат сотрудников: туда приходят обращения с кнопками «Предложить время» /
+   «Специалист готов» / «Другой ответ»; сотрудник отвечает реплаем, родитель получает уведомление.
+   id чата покажет команда `/chatid` (написать боту в этом чате; в группе бот видит только команды и реплаи).
+   Без `STAFF_CHAT_ID` обращения сохраняются, но ответить на них из Telegram нельзя.
 3. `npx supabase functions deploy telegram-bot --use-api` (JWT выключен в `config.toml`: проверяется секрет webhook).
 4. Webhook (один раз):
    `curl -s "https://api.telegram.org/bot<токен>/setWebhook" -d url=https://<ref>.supabase.co/functions/v1/telegram-bot -d secret_token=<секрет>`.
