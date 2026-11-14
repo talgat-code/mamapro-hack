@@ -115,7 +115,7 @@ function setupWidgets(bot, d) {
     }
   }
 
-  async function onQuery(wq, shared) {
+  async function onQuery(ctx, wq, shared) {
     if (shared || !wq.chat || !wq.message_id) return { err: "Этот виджет работает только в чате с ботом" };
     var m = /^([a-z])(?::(\d))?\|(.*)$/.exec(wq.data || "");
     var q = m && parseState(m[3]);
@@ -127,7 +127,7 @@ function setupWidgets(bot, d) {
     if (act === "l") {
       if (!complete(q)) return { err: "Сначала ответьте на вопросы" };
       var rec = d.recommend(q.t).keys.map(function (k) { return d.SPECIALISTS[k].name; });
-      await d.startLead(wq.chat.id, { age: q.a, topics: q.t.slice(), format: q.f, rec: rec });
+      await d.startLead(ctx, wq.chat.id, { age: q.a, topics: q.t.slice(), format: q.f, rec: rec });
       return { m: "Продолжим в чате — ответьте на сообщение ниже" };
     }
 
@@ -165,7 +165,7 @@ function setupWidgets(bot, d) {
     if (!wq) return next();
     var answer;
     try {
-      answer = await onQuery(wq, !u.widget_query);
+      answer = await onQuery(ctx, wq, !u.widget_query);
     } catch (err) {
       d.logError("widget_query", err);
       answer = { err: FAIL };

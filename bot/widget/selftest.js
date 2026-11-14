@@ -13,13 +13,16 @@ const OFF = process.argv[2] === "off";
 process.env.BOT_TOKEN = "123:offline-selftest";
 process.env.SUPABASE_URL = "";
 process.env.SUPABASE_ANON_KEY = "";
+process.env.BOT_SKIP_WEBHOOK_CHECK = "1";
 if (OFF) delete process.env.WIDGETS_ENABLED; else process.env.WIDGETS_ENABLED = "1";
 process.argv.push("--env", ".env.selftest-none");
 
-var bot = null, startOptions = null;
-grammy.Bot.prototype.start = function (opts) { bot = this; startOptions = opts; return Promise.resolve(); };
+var bot = null, startOptions = null, started;
+const ready = new Promise(function (r) { started = r; });
+grammy.Bot.prototype.start = function (opts) { bot = this; startOptions = opts; started(); return Promise.resolve(); };
 
 const calls = [];
+var nextId = 100;
 var editFailure = null;
 const origLog = console.log, origWarn = console.warn;
 const logs = [];
@@ -27,10 +30,11 @@ console.log = function () { logs.push([].join.call(arguments, " ")); };
 console.warn = function () {};
 
 require(path.join(__dirname, "..", "index.js"));
-assert(bot, "bot.start не вызван");
 
+async function boot() {
+await ready;
 bot.botInfo = { id: 1, is_bot: true, first_name: "Test", username: "mamapro_test_bot" };
-var nextId = 100;
+
 bot.api.config.use(async function (prev, method, payload) {
   calls.push({ method: method, payload: payload });
   if (method === "editMessageWidgetData" && editFailure) {
@@ -41,6 +45,7 @@ bot.api.config.use(async function (prev, method, payload) {
   if (method === "sendWidget" || method === "sendMessage") result = { message_id: nextId++, chat: { id: payload.chat_id }, date: 0 };
   return { ok: true, result: result };
 });
+}
 
 const ME = { id: 1001, is_bot: false, first_name: "Ann" };
 const CHAT = { id: 1001, type: "private", first_name: "Ann" };
@@ -69,6 +74,7 @@ async function check(name, fn) {
 }
 
 (async function () {
+  await boot();
   if (OFF) {
     await check("без флага allowed_updates не передаётся", function () {
       assert.strictEqual(startOptions.allowed_updates, undefined);

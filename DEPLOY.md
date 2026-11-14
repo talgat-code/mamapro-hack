@@ -17,6 +17,22 @@
 - `service_role` key, пароль БД и токены не коммитим: только локальный `.env` (в `.gitignore`).
   Шаблон — `.env.example`.
 
+## Telegram-бот (Supabase Edge Function)
+Прод: функция `supabase/functions/telegram-bot`, Telegram присылает апдейты webhook'ом. Логика бота —
+`supabase/functions/_shared/bot.mjs`, состояние диалога — таблица `public.bot_sessions` (только service_role).
+Значения ниже — из локального `.env` (`BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`).
+1. `npx supabase login`, `npx supabase link --project-ref <ref>`, `npx supabase db push` (миграция `bot_sessions`).
+2. `npx supabase secrets set BOT_TOKEN=<токен> TELEGRAM_WEBHOOK_SECRET=<секрет>`.
+3. `npx supabase functions deploy telegram-bot --use-api` (JWT выключен в `config.toml`: проверяется секрет webhook).
+4. Webhook (один раз):
+   `curl -s "https://api.telegram.org/bot<токен>/setWebhook" -d url=https://<ref>.supabase.co/functions/v1/telegram-bot -d secret_token=<секрет>`.
+   Проверка: `.../getWebhookInfo` (поле `url`, нет `last_error_message`), затем `/start` боту.
+5. Логи: дашборд Supabase → Edge Functions → telegram-bot → Logs.
+
+Локально (`cd bot && npm ci && node index.js`) — long polling, состояние в памяти. Пока у бота стоит webhook,
+локальный запуск откажется стартовать, чтобы не отключить прод: для разработки используйте отдельного бота
+(`node index.js --env .env.dev` со своим `BOT_TOKEN`).
+
 ## Заявки
 Таблица `public.leads`: аноним может только добавлять строки (RLS). Читать заявки —
 в дашборде Supabase (Table Editor) или через service_role на сервере.
