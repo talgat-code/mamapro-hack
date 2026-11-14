@@ -422,6 +422,9 @@ export const TEXT = {
     lStoryChild: "Ребёнок", lStoryConcern: "С чем пришли", lStorySpecs: "Специалисты", lStoryPeriod: "Период",
     storyPeriod: "с {date}, {n} нед.", lMilestones: "Как менялось", milestone: "Неделя {n}: {text}", lHelped: "Что помогло",
     btnSiteCard: "🌐 Карточка и отзывы на сайте",
+    // Короткие подписи для главного меню (две колонки — длинные Telegram обрезает).
+    mChild: "📋 Карточка ребёнка", mDiary: "📝 Дневник", mProgress: "📈 Прогресс", mReport: "📊 Отчёт",
+    mNewbie: "🗺 С чего начать", mStories: "👨‍👩‍👧 Истории семей", mReqs: "📨 Мои обращения", mSettings: "⚙️ Мои данные",
     btnStoryProgress: "📈 Прогресс по неделям", btnAllStories: "← Все истории", btnStory: "📖 {title}",
     genericError: "Что-то пошло не так. Ваши ответы сохранены. Попробуйте ещё раз.",
 
@@ -695,6 +698,8 @@ export const TEXT = {
     lStoryChild: "Бала", lStoryConcern: "Немен келді", lStorySpecs: "Мамандар", lStoryPeriod: "Кезең",
     storyPeriod: "{date} бастап, {n} апта", lMilestones: "Қалай өзгерді", milestone: "{n}-апта: {text}", lHelped: "Не көмектесті",
     btnSiteCard: "🌐 Сайттағы карточка мен пікірлер",
+    mChild: "📋 Бала картасы", mDiary: "📝 Күнделік", mProgress: "📈 Прогресс", mReport: "📊 Есеп",
+    mNewbie: "🗺 Неден бастау", mStories: "👨‍👩‍👧 Отбасылар", mReqs: "📨 Өтініштерім", mSettings: "⚙️ Деректерім",
     btnStoryProgress: "📈 Апта бойынша прогресс", btnAllStories: "← Барлық тарихтар", btnStory: "📖 {title}",
     genericError: "Бірдеңе дұрыс болмады. Жауаптарыңыз сақталды. Қайталап көріңіз.",
 

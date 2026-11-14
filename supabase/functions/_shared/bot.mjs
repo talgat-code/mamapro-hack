@@ -1357,16 +1357,13 @@ export function createBot(deps) {
     },
 
     menu: async (s, ctx) => {
-      const k = kb().text(t(s, "btnSupport"), "go:supportIntro").row()
-        .text(t(s, "btnFindSpec"), "go:sections").row()
-        .text(t(s, "btnChildCard"), "go:childCard").row()
-        .text(t(s, "btnDiary"), "go:diary").row()
-        .text(t(s, "btnProgress"), "go:progress").row()
-        .text(t(s, "btnReport"), "go:report").row()
-        .text(t(s, "btnNewbie"), "go:newbie").row()
-        .text(t(s, "btnStories"), "go:stories").row()
-        .text(t(s, "btnMyReqs"), "go:reqs").row()
-        .text(t(s, "btnSettings"), "go:settings").row();
+      // Две главные кнопки — на всю строку, остальные — по две в ряд (короткие подписи mXxx).
+      const k = kb().text("🤍 " + t(s, "btnSupport"), "go:supportIntro").row()
+        .text("🔎 " + t(s, "btnFindSpec"), "go:sections").row()
+        .text(t(s, "mChild"), "go:childCard").text(t(s, "mDiary"), "go:diary").row()
+        .text(t(s, "mProgress"), "go:progress").text(t(s, "mReport"), "go:report").row()
+        .text(t(s, "mNewbie"), "go:newbie").text(t(s, "mStories"), "go:stories").row()
+        .text(t(s, "mReqs"), "go:reqs").text(t(s, "mSettings"), "go:settings").row();
       // Специалист: дневники, открытые ему родителями, или ввод кода.
       let viewed = [];
       try { viewed = ctx && ctx.chat ? await children.viewerChildren(ctx.chat.id) : []; } catch (err) { logError("viewerChildren", err); }
