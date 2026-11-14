@@ -5,7 +5,7 @@
 // Деплой и установка webhook — DEPLOY.md («Telegram-бот»).
 import { Bot, InlineKeyboard, InputFile, session, webhookCallback } from "npm:grammy@1.46.0";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { createBot, supabaseRequestStore, supabaseSessionStorage, supabaseSpecialistSource } from "../_shared/bot.mjs";
+import { createBot, supabaseChildStore, supabaseRequestStore, supabaseSessionStorage, supabaseSpecialistSource } from "../_shared/bot.mjs";
 
 const token = Deno.env.get("BOT_TOKEN") ?? "";
 const secret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
@@ -34,6 +34,7 @@ if (missing.length === 0) {
     Bot, InlineKeyboard, InputFile, session, token, supabase, logError,
     storage: supabaseSessionStorage(supabase),
     requests: supabaseRequestStore(supabase),
+    children: supabaseChildStore(supabase), // карточка ребёнка, дневник, маршрут новичка
     loadSpecialists: supabaseSpecialistSource(supabase),
     staffChatId,
   });

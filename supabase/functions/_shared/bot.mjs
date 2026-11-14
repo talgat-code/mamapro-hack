@@ -9,7 +9,8 @@
 // из служебного чата STAFF_CHAT_ID кнопками под карточкой обращения.
 import {
   CITIES, SUPPORT_CITIES, AGES, AGE_NONE, THEMES, SECTIONS, CLASS_LANGS, FORMATS, BUDGETS, BUDGET_MAX,
-  CONTACT_TIMES, PROFILES, TEXT, CHOOSE_LANG, MONTHS, WEEKDAYS, CONTACT_SLOTS, MEETING_SLOTS, CALENDAR_DAYS_AHEAD
+  CONTACT_TIMES, PROFILES, TEXT, CHOOSE_LANG, MONTHS, WEEKDAYS, CONTACT_SLOTS, MEETING_SLOTS, CALENDAR_DAYS_AHEAD,
+  CHILD_AGES, DIARY_MOODS, DIARY_TAGS, REPORT_PERIODS, NEWBIE_CONCERNS, NEWBIE_BEEN, NEWBIE_BUDGETS
 } from "./catalog.mjs";
 import { WELCOME_JPEG_B64 } from "./welcome-image.mjs";
 
@@ -76,6 +77,88 @@ export function memoryRequestStore() {
       Object.assign(r, patch);
       return copy(r);
     }
+  };
+}
+
+// Карточка ребёнка, дневник и маршрут новичка: таблицы bot_children, bot_child_specialists, bot_diary_entries,
+// bot_newbie_routes (миграция 20261115200000_child_timeline.sql). Только с service_role: это сведения о здоровье ребёнка.
+// Ребёнок: { id, chat_id, name, age_group, diagnoses[], allergies, medications, specialists: [{ name, specialty }] }.
+export function supabaseChildStore(sb) {
+  const check = (res, what) => { if (res.error) throw new Error(what + ": " + res.error.message); return res.data; };
+  const store = {
+    // Одна карточка на чат — последняя созданная.
+    get: async (chatId) => {
+      const child = check(await sb.from("bot_children").select("*").eq("chat_id", chatId)
+        .order("created_at", { ascending: false }).limit(1).maybeSingle(), "bot_children select");
+      if (!child) return null;
+      child.specialists = check(await sb.from("bot_child_specialists").select("name, specialty")
+        .eq("child_id", child.id).order("created_at"), "bot_child_specialists select") || [];
+      return child;
+    },
+    // Создать или обновить (если id задан); список специалистов заменяется целиком.
+    save: async (chatId, id, d) => {
+      const row = { name: d.name, age_group: d.age, diagnoses: d.diagnoses, allergies: d.allergies || null,
+        medications: d.medications || null, updated_at: new Date().toISOString() };
+      const child = id
+        ? check(await sb.from("bot_children").update(row).eq("id", id).eq("chat_id", chatId).select().single(), "bot_children update")
+        : check(await sb.from("bot_children").insert(Object.assign({ chat_id: chatId }, row)).select().single(), "bot_children insert");
+      check(await sb.from("bot_child_specialists").delete().eq("child_id", child.id), "bot_child_specialists delete");
+      if (d.specialists.length) {
+        check(await sb.from("bot_child_specialists").insert(d.specialists.map((x) => ({ child_id: child.id, name: x.name, specialty: x.specialty }))),
+          "bot_child_specialists insert");
+      }
+      return store.get(chatId);
+    },
+    addSpecialist: async (childId, sp) => {
+      check(await sb.from("bot_child_specialists").insert({ child_id: childId, name: sp.name, specialty: sp.specialty }), "bot_child_specialists insert");
+    },
+    remove: async (chatId) => { check(await sb.from("bot_children").delete().eq("chat_id", chatId), "bot_children delete"); },
+    addDiary: async (childId, e) => {
+      check(await sb.from("bot_diary_entries").insert({ child_id: childId, date: e.date, mood: e.mood, tags: e.tags, note: e.note || null }),
+        "bot_diary_entries insert");
+    },
+    // Записи с даты fromIso ("YYYY-MM-DD") включительно, по возрастанию даты.
+    diary: async (childId, fromIso) => check(await sb.from("bot_diary_entries").select("date, mood, tags, note, created_at")
+      .eq("child_id", childId).gte("date", fromIso).order("date").order("created_at"), "bot_diary_entries select") || [],
+    hasDiary: async (childId) => {
+      const res = await sb.from("bot_diary_entries").select("id", { count: "exact", head: true }).eq("child_id", childId);
+      check(res, "bot_diary_entries count");
+      return (res.count || 0) > 0;
+    },
+    saveRoute: async (row) => { check(await sb.from("bot_newbie_routes").insert(row), "bot_newbie_routes insert"); }
+  };
+  return store;
+}
+
+// Без БД (локальный запуск): всё в памяти процесса, пропадает при перезапуске.
+export function memoryChildStore() {
+  const children = [];
+  const diary = [];
+  const copy = (r) => (r ? JSON.parse(JSON.stringify(r)) : null);
+  const find = (chatId) => children.filter((c) => String(c.chat_id) === String(chatId)).pop() || null;
+  return {
+    get: async (chatId) => copy(find(chatId)),
+    save: async (chatId, id, d) => {
+      let c = id ? children.find((x) => x.id === id && String(x.chat_id) === String(chatId)) : null;
+      if (!c) { c = { id: globalThis.crypto.randomUUID(), chat_id: chatId, created_at: new Date().toISOString() }; children.push(c); }
+      Object.assign(c, { name: d.name, age_group: d.age, diagnoses: d.diagnoses.slice(), allergies: d.allergies || null,
+        medications: d.medications || null, specialists: d.specialists.map((x) => ({ name: x.name, specialty: x.specialty })) });
+      return copy(c);
+    },
+    addSpecialist: async (childId, sp) => {
+      const c = children.find((x) => x.id === childId);
+      if (c) c.specialists.push({ name: sp.name, specialty: sp.specialty });
+    },
+    remove: async (chatId) => {
+      const ids = children.filter((c) => String(c.chat_id) === String(chatId)).map((c) => c.id);
+      for (let i = children.length - 1; i >= 0; i--) if (ids.indexOf(children[i].id) !== -1) children.splice(i, 1);
+      for (let i = diary.length - 1; i >= 0; i--) if (ids.indexOf(diary[i].child_id) !== -1) diary.splice(i, 1);
+    },
+    addDiary: async (childId, e) => { diary.push(Object.assign({ child_id: childId, created_at: new Date().toISOString() }, copy(e))); },
+    diary: async (childId, fromIso) => diary.filter((e) => e.child_id === childId && e.date >= fromIso)
+      .sort((a, b) => (a.date + a.created_at).localeCompare(b.date + b.created_at)).map(copy),
+    hasDiary: async (childId) => diary.some((e) => e.child_id === childId),
+    saveRoute: async () => {}
   };
 }
 
@@ -207,7 +290,9 @@ function initialState() {
     p: { city: null, first: "", last: "", phone: "", age: null, topic: null, time: null },
     q: { dir: null, clang: null, fmt: null, budget: null, idx: 0, fav: [], cmp: [] },
     ui: { theme: null, sec: null, spec: null, req: null, info: false, err: null, flash: null,
-      pendingFirst: null, tmpBudget: null, prev: null, retry: null },
+      pendingFirst: null, tmpBudget: null, prev: null, retry: null,
+      childStep: null, childDraft: null, childEditId: null, diary: null, newbie: null },
+    child: null, // id карточки ребёнка (кэш; сама карточка — в хранилище children)
     staff: null // ожидание ответа сотрудника (только в служебном чате)
   };
 }
@@ -221,12 +306,14 @@ function welcomeImage() {
   return welcomeBytes;
 }
 
-// deps: { Bot, InlineKeyboard, InputFile?, session, token, loadSpecialists?, botConfig?, supabase?, storage?, requests?, staffChatId?, logError, extend? }
+// deps: { Bot, InlineKeyboard, InputFile?, session, token, loadSpecialists?, botConfig?, supabase?, storage?, requests?, children?, staffChatId?, logError, extend? }
 export function createBot(deps) {
   const InlineKeyboard = deps.InlineKeyboard;
   const supabase = deps.supabase || null;
   const storage = deps.storage || memorySessionStorage();
   const requests = deps.requests || memoryRequestStore();
+  // Карточки детей и дневник — только через хранилище с service_role (см. supabaseChildStore), иначе в памяти.
+  const children = deps.children || memoryChildStore();
   const staffChatId = deps.staffChatId ? String(deps.staffChatId) : "";
   const logError = deps.logError || ((where, err) => console.error("[" + where + "] " + err));
 
@@ -300,6 +387,78 @@ export function createBot(deps) {
     return m ? whenLabel(s, m[1], m[2]) : String(v || "");
   };
   const dateLabel = (iso) => { const d = String(iso || "").slice(0, 10).split("-"); return d.length === 3 ? d[2] + "." + d[1] + "." + d[0] : ""; };
+
+  // ---------- Карточка ребёнка, дневник, отчёт, маршрут ----------
+  const SEP = "══════════════════════";
+  const CHILD_STEPS = ["name", "age", "diag", "spec", "allergy", "meds"];
+  const CHILD_NAME_RE = /^[\p{L}\p{M}][\p{L}\p{M}'’ -]*$/u;
+  const emptyChildDraft = () => ({ name: "", age: null, diagnoses: [], specialists: [], allergies: "", medications: "" });
+  const childAgeLabel = (s, code) => { const a = CHILD_AGES.find((x) => x.code === code); return a ? lbl(s, a) : t(s, "notSet"); };
+
+  async function loadChild(ctx) {
+    const c = await children.get(ctx.chat.id);
+    ctx.session.child = c ? c.id : null;
+    return c;
+  }
+
+  // «Айгуль — логопед», «Айгуль - логопед», «Айгуль: логопед», «Айгуль, логопед» → { name, specialty }.
+  function parseSpecialist(text) {
+    const v = String(text).replace(/\s+/g, " ").trim();
+    for (const re of [/\s*[—–]\s*/, /\s+-\s+/, /\s*[:,]\s*/]) {
+      const m = re.exec(v);
+      if (!m) continue;
+      const name = v.slice(0, m.index).trim(), specialty = v.slice(m.index + m[0].length).trim();
+      return name && specialty && name.length <= 60 && specialty.length <= 60 ? { name, specialty } : null;
+    }
+    return null;
+  }
+
+  function childLines(s, c) {
+    const specs = c.specialists || [];
+    const lines = [SEP, t(s, "childCardTitle"), "👦 <b>" + esc(c.name) + "</b>, " + esc(childAgeLabel(s, c.age_group)),
+      t(s, "lChildDiag") + ": " + esc((c.diagnoses || []).length ? c.diagnoses.join(", ") : t(s, "childNone")),
+      t(s, "lChildSpecs") + ":" + (specs.length ? "" : " " + t(s, "childNone"))];
+    specs.forEach((x) => lines.push("  • " + esc(x.name) + " — " + esc(x.specialty)));
+    lines.push(t(s, "lChildMeds") + ": " + esc(c.medications || t(s, "childNone")),
+      t(s, "lChildAllergy") + ": " + esc(c.allergies || t(s, "childNone")), SEP);
+    return lines;
+  }
+
+  const moodCounts = (list) => {
+    const c = { good: 0, normal: 0, bad: 0 };
+    list.forEach((e) => { if (e.mood in c) c[e.mood] += 1; });
+    return c;
+  };
+  const hasTag = (e, code) => (e.tags || []).indexOf(code) !== -1;
+
+  function reportText(s, c, list, from, to) {
+    const count = (code) => list.filter((e) => hasTag(e, code)).length;
+    const days = new Set(list.map((e) => e.date)).size;
+    const hw = new Set(list.filter((e) => hasTag(e, "homework")).map((e) => e.date)).size;
+    const notes = list.filter((e) => e.note).slice(-5);
+    const lines = [SEP, t(s, "reportTitle"), "<b>" + esc(c.name) + "</b>, " + esc(childAgeLabel(s, c.age_group)),
+      t(s, "reportDates", { from: dateLabel(isoDate(from)), to: dateLabel(isoDate(to)) }), SEP,
+      t(s, "reportMood", moodCounts(list)),
+      t(s, "reportTags", { words: count("new_word"), tantrums: count("tantrum"), sleep: count("bad_sleep"),
+        eat: count("bad_eat"), meds: count("medicine"), hw, days })];
+    if (notes.length) {
+      lines.push(t(s, "reportNotes"));
+      notes.forEach((e) => lines.push("• " + dateLabel(e.date) + ": " + esc(e.note)));
+    } else lines.push(t(s, "reportNoNotes"));
+    lines.push(SEP, t(s, "reportDisclaimer"));
+    return lines.join("\n");
+  }
+
+  // Маршрут новичка: шаблон по ответам. Диагноз есть → общий план; были без ответа → второе мнение; иначе — по беспокойству.
+  const routeKey = (nb) => (nb.been === "diag" ? "route_diag" : nb.been === "noanswer" ? "route_noanswer" : "route_" + nb.concern + "_no");
+  const newbieDone = (nb) => !!(nb && nb.age && nb.concern && nb.been && nb.budget);
+  function routeText(s, nb) {
+    const steps = TEXT[L(s)][routeKey(nb)] || TEXT.ru[routeKey(nb)] || [];
+    const lines = [t(s, "newbieTitle"), ""];
+    steps.forEach((st, i) => lines.push(t(s, "newbieStep", { n: i + 1, text: st }), ""));
+    lines.push(t(s, "budgetHint_" + nb.budget), "", t(s, "newbieDisclaimer"));
+    return lines.join("\n");
+  }
 
   // ---------- Подбор ----------
   const matches = matchesProfile;
@@ -714,9 +873,200 @@ export function createBot(deps) {
       return { text: t(s, "cancelQ"), kb: kb().text(t(s, "btnYesCancel"), "rqy:" + r.id).text(t(s, "btnKeep"), "rq:" + r.id) };
     },
 
+    // ----- Карточка ребёнка -----
+    childCard: async (s, ctx) => {
+      const c = await loadChild(ctx);
+      if (!c) {
+        return {
+          text: t(s, "childEmpty") + "\n" + t(s, "childCreateQ") + "\n\n<i>" + t(s, "childPrivacy") + "</i>",
+          kb: kb().text(t(s, "btnChildCreate"), "ch:new").row().text("← " + t(s, "btnMenu"), "go:menu")
+        };
+      }
+      return {
+        text: childLines(s, c).join("\n"),
+        kb: kb().text(t(s, "btnChildEdit"), "ch:edit").text(t(s, "btnChildAddSpec"), "ch:addsp").row()
+          .text(t(s, "btnChildDelete"), "ch:del").row()
+          .text("← " + t(s, "btnMenu"), "go:menu")
+      };
+    },
+
+    // Пошаговое создание и редактирование: шаг — s.ui.childStep, ответы — s.ui.childDraft.
+    // При редактировании черновик заполнен текущими данными, «Оставить как есть» сохраняет значение шага.
+    childCreate: (s) => {
+      const d = s.ui.childDraft;
+      const step = s.ui.childStep;
+      if (!d || CHILD_STEPS.indexOf(step) === -1) return { redirect: "childCard" };
+      const edit = !!s.ui.childEditId;
+      const now = (v) => (edit && v ? "\n\n" + t(s, "childNow", { v }) : "");
+      const k = kb();
+      let text;
+      if (step === "name") {
+        text = t(s, "childNameQ") + now(d.name);
+        if (edit && d.name) k.text(t(s, "btnKeep2"), "ch:skip").row();
+      } else if (step === "age") {
+        text = t(s, "childAgeQ", { name: d.name }) + now(d.age ? childAgeLabel(s, d.age) : "");
+        pairs(k, CHILD_AGES.map((a) => [(d.age === a.code ? "✅ " : "") + lbl(s, a), "cha:" + a.code]));
+        if (edit && d.age) k.text(t(s, "btnKeep2"), "ch:skip").row();
+      } else if (step === "diag") {
+        text = t(s, "childDiagQ") + now(d.diagnoses.join(", "));
+        k.text(t(s, edit && d.diagnoses.length ? "btnKeep2" : "btnSkip"), "ch:skip");
+        if (d.diagnoses.length) k.text(t(s, "btnClear"), "ch:clear");
+        k.row();
+      } else if (step === "spec") {
+        text = t(s, "childSpecQ", { name: d.name });
+        if (d.specialists.length) text += "\n\n" + d.specialists.map((x) => "• " + esc(x.name) + " — " + esc(x.specialty)).join("\n");
+        k.text(t(s, "btnDone"), "ch:skip");
+        if (d.specialists.length) k.text(t(s, "btnClearSpecs"), "ch:clear");
+        k.row();
+      } else {
+        const v = step === "allergy" ? d.allergies : d.medications;
+        text = t(s, step === "allergy" ? "childAllergyQ" : "childMedsQ") + now(v);
+        k.text(t(s, edit && v ? "btnKeep2" : "btnSkip"), "ch:skip");
+        if (v) k.text(t(s, "btnClear"), "ch:clear");
+        k.row();
+      }
+      if (CHILD_STEPS.indexOf(step) > 0) k.text(t(s, "btnBack"), "ch:back");
+      k.text(t(s, "btnCancelEdit"), "ch:cancel");
+      return { text, kb: k };
+    },
+
+    childAddSpec: (s) => {
+      if (!s.child) return { redirect: "childCard" };
+      return { text: t(s, "childAddSpecQ"), kb: kb().text(t(s, "btnBack"), "go:childCard") };
+    },
+
+    childDelete: async (s, ctx) => {
+      const c = await loadChild(ctx);
+      if (!c) return { redirect: "childCard" };
+      return {
+        text: t(s, "childDeleteQ", { name: c.name }),
+        kb: kb().text(t(s, "btnChildDeleteYes"), "ch:delyes").text(t(s, "btnCancelEdit"), "go:childCard")
+      };
+    },
+
+    // Дневник и отчёт без карточки недоступны.
+    needChild: (s) => ({
+      text: t(s, "childNeed"),
+      kb: kb().text(t(s, "btnChildCreate"), "ch:new").row().text("← " + t(s, "btnMenu"), "go:menu")
+    }),
+
+    // ----- Дневник: настроение → отметки → заметка; черновик записи — s.ui.diary -----
+    diary: async (s, ctx) => {
+      const c = await loadChild(ctx);
+      if (!c) return { redirect: "needChild" };
+      const k = kb();
+      DIARY_MOODS.forEach((m) => k.text(m.icon + " " + lbl(s, m), "dm:" + m.code));
+      k.row().text("← " + t(s, "btnMenu"), "go:menu");
+      return { text: t(s, "diaryQ", { name: c.name }), kb: k };
+    },
+
+    diaryTags: (s) => {
+      const d = s.ui.diary;
+      if (!d || !d.mood) return { redirect: "diary" };
+      const k = pairs(kb(), DIARY_TAGS.map((x) => [(d.tags.indexOf(x.code) !== -1 ? "✅ " : "") + x.icon + " " + lbl(s, x), "dt:" + x.code]));
+      k.text("✅ " + t(s, "btnDone"), "dt:done").row().text(t(s, "btnBack"), "go:diary");
+      return { text: t(s, "diaryTagsQ"), kb: k };
+    },
+
+    diaryNote: (s) => {
+      const d = s.ui.diary;
+      if (!d || !d.mood) return { redirect: "diary" };
+      return {
+        text: t(s, "diaryNoteQ"),
+        kb: kb().text(t(s, "btnWrite"), "dn:write").text(t(s, "btnSkipNote"), "dn:skip").row().text(t(s, "btnBack"), "go:diaryTags")
+      };
+    },
+
+    diaryWrite: (s) => {
+      const d = s.ui.diary;
+      if (!d || !d.mood) return { redirect: "diary" };
+      return { text: t(s, "diaryWriteQ"), kb: kb().text(t(s, "btnSkipNote"), "dn:skip").row().text(t(s, "btnBack"), "go:diaryNote") };
+    },
+
+    diaryDone: async (s, ctx) => {
+      const c = await loadChild(ctx);
+      if (!c) return { redirect: "needChild" };
+      const today = new Date(kzToday());
+      const first = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1);
+      const m = moodCounts(await children.diary(c.id, isoDate(first)));
+      const month = MONTHS[L(s)].nom[today.getUTCMonth()];
+      return {
+        text: t(s, "diarySaved") + "\n" + t(s, "diaryMonth", Object.assign({ month: L(s) === "kk" ? month : month.toLowerCase(), name: c.name }, m)),
+        kb: kb().text(t(s, "btnReport"), "go:report").row().text(t(s, "btnDiaryAgain"), "go:diary").row()
+          .text("← " + t(s, "btnMenu"), "go:menu")
+      };
+    },
+
+    // ----- Отчёт для специалиста -----
+    report: async (s, ctx) => {
+      const c = await loadChild(ctx);
+      if (!c) return { redirect: "needChild" };
+      if (!(await children.hasDiary(c.id))) {
+        return { text: t(s, "reportNoDiary"), kb: kb().text(t(s, "btnStartDiary"), "go:diary").row().text("← " + t(s, "btnMenu"), "go:menu") };
+      }
+      const k = kb();
+      REPORT_PERIODS.forEach((n) => k.text(t(s, "btnPeriod" + n), "rp:" + n));
+      k.row().text("← " + t(s, "btnMenu"), "go:menu");
+      return { text: t(s, "reportQ"), kb: k };
+    },
+
+    // Сам отчёт уходит отдельным сообщением (его удобно переслать), этот экран — под ним.
+    reportSent: (s) => ({
+      text: t(s, "reportForward"),
+      kb: kb().text(t(s, "reportQ").replace(/<[^>]+>/g, ""), "go:report").row().text("← " + t(s, "btnMenu"), "go:menu")
+    }),
+
+    // ----- Маршрут новичка: возраст → беспокойство → были ли у специалиста → бюджет; ответы — s.ui.newbie -----
+    newbie: (s) => {
+      const k = pairs(kb(), CHILD_AGES.map((a) => [lbl(s, a), "nb:a:" + a.code]));
+      k.text("← " + t(s, "btnMenu"), "go:menu");
+      return { text: t(s, "newbieQ") + "\n\n" + t(s, "newbieAgeQ"), kb: k };
+    },
+
+    newbieConcern: (s) => {
+      if (!s.ui.newbie || !s.ui.newbie.age) return { redirect: "newbie" };
+      const k = kb();
+      NEWBIE_CONCERNS.forEach((x) => k.text(x.icon + " " + lbl(s, x), "nb:c:" + x.code).row());
+      k.text(t(s, "btnBack"), "go:newbie");
+      return { text: t(s, "newbieConcernQ"), kb: k };
+    },
+
+    newbieSpec: (s) => {
+      if (!s.ui.newbie || !s.ui.newbie.concern) return { redirect: "newbieConcern" };
+      const k = kb();
+      NEWBIE_BEEN.forEach((x) => k.text(lbl(s, x), "nb:s:" + x.code).row());
+      k.text(t(s, "btnBack"), "go:newbieConcern");
+      return { text: t(s, "newbieSpecQ"), kb: k };
+    },
+
+    newbieBudget: (s) => {
+      if (!s.ui.newbie || !s.ui.newbie.been) return { redirect: "newbieSpec" };
+      const k = kb();
+      NEWBIE_BUDGETS.forEach((x) => k.text(lbl(s, x), "nb:b:" + x.code));
+      k.row().text(t(s, "btnBack"), "go:newbieSpec");
+      return { text: t(s, "newbieBudgetQ"), kb: k };
+    },
+
+    newbieResult: async (s, ctx) => {
+      const nb = s.ui.newbie;
+      if (!newbieDone(nb)) return { redirect: "newbie" };
+      const hasChild = !!(await loadChild(ctx));
+      let text = routeText(s, nb);
+      const k = kb();
+      if (hasChild) k.text(t(s, "btnChildCard"), "go:childCard").row();
+      else { text += "\n\n" + t(s, "newbieCardQ"); k.text(t(s, "btnChildCreate"), "ch:new").row(); }
+      k.text(t(s, "btnFindSpec"), "go:sections").row()
+        .text(t(s, "btnNewbieAgain"), "go:newbie").text("← " + t(s, "btnMenu"), "go:menu");
+      return { text, kb: k };
+    },
+
     menu: (s) => {
       const k = kb().text(t(s, "btnSupport"), "go:supportIntro").row()
         .text(t(s, "btnFindSpec"), "go:sections").row()
+        .text(t(s, "btnChildCard"), "go:childCard").row()
+        .text(t(s, "btnDiary"), "go:diary").row()
+        .text(t(s, "btnReport"), "go:report").row()
+        .text(t(s, "btnNewbie"), "go:newbie").row()
         .text(t(s, "btnMyReqs"), "go:reqs").row()
         .text(t(s, "btnSettings"), "go:settings").row();
       const favs = s.q.fav.map(profile).filter(Boolean);
@@ -1459,6 +1809,184 @@ export function createBot(deps) {
     return show(ctx, "req");
   });
 
+  // ----- Карточка ребёнка -----
+  function nextChildStep(ctx) {
+    const s = ctx.session;
+    const i = CHILD_STEPS.indexOf(s.ui.childStep);
+    if (i === CHILD_STEPS.length - 1) return saveChild(ctx);
+    s.ui.childStep = CHILD_STEPS[i + 1];
+    return show(ctx, "childCreate");
+  }
+
+  async function saveChild(ctx) {
+    const s = ctx.session;
+    const d = s.ui.childDraft;
+    if (!d || !d.name || !d.age) { s.ui.childStep = !d || !d.name ? "name" : "age"; return show(ctx, "childCreate"); }
+    let c;
+    try {
+      c = await children.save(ctx.chat.id, s.ui.childEditId, d);
+    } catch (err) {
+      logError("children", err);
+      s.ui.err = t(s, "childSaveFail");
+      return show(ctx, "childCreate");
+    }
+    s.child = c ? c.id : null;
+    s.ui.childDraft = null;
+    s.ui.childStep = null;
+    s.ui.childEditId = null;
+    s.ui.flash = t(s, "childCreated");
+    return show(ctx, "childCard");
+  }
+
+  bot.callbackQuery(/^ch:(new|edit|skip|clear|back|cancel|addsp|del|delyes)$/, async (ctx) => {
+    const s = ctx.session;
+    const action = ctx.match[1];
+    const d = s.ui.childDraft;
+    if (action === "new" || action === "edit") {
+      const c = await loadChild(ctx);
+      if (action === "new" && c) return show(ctx, "childCard"); // карточка одна на чат
+      if (action === "edit" && !c) return show(ctx, "childCard");
+      s.ui.childDraft = c
+        ? { name: c.name, age: c.age_group, diagnoses: (c.diagnoses || []).slice(), allergies: c.allergies || "",
+          medications: c.medications || "", specialists: (c.specialists || []).map((x) => ({ name: x.name, specialty: x.specialty })) }
+        : emptyChildDraft();
+      s.ui.childEditId = c ? c.id : null;
+      s.ui.childStep = "name";
+      return show(ctx, "childCreate");
+    }
+    if (action === "addsp") return show(ctx, (await loadChild(ctx)) ? "childAddSpec" : "childCard");
+    if (action === "del") return show(ctx, "childDelete");
+    if (action === "delyes") {
+      await children.remove(ctx.chat.id);
+      s.child = null;
+      s.ui.diary = null;
+      s.ui.flash = t(s, "childDeleted");
+      return show(ctx, "childCard");
+    }
+    if (action === "cancel") {
+      s.ui.childDraft = null;
+      s.ui.childStep = null;
+      s.ui.childEditId = null;
+      return show(ctx, "childCard");
+    }
+    if (!d || CHILD_STEPS.indexOf(s.ui.childStep) === -1) return show(ctx, "childCard");
+    const step = s.ui.childStep;
+    if (action === "back") {
+      s.ui.childStep = CHILD_STEPS[Math.max(0, CHILD_STEPS.indexOf(step) - 1)];
+      return show(ctx, "childCreate");
+    }
+    if (action === "clear") {
+      if (step === "diag") d.diagnoses = [];
+      else if (step === "spec") d.specialists = [];
+      else if (step === "allergy") d.allergies = "";
+      else if (step === "meds") d.medications = "";
+      return show(ctx, "childCreate");
+    }
+    // skip: «Пропустить» / «Оставить как есть» / «Готово». Имя и возраст обязательны.
+    if ((step === "name" && !d.name) || (step === "age" && !d.age)) return show(ctx, "childCreate");
+    return nextChildStep(ctx);
+  });
+
+  bot.callbackQuery(/^cha:([\w-]+)$/, (ctx) => {
+    const s = ctx.session;
+    const a = CHILD_AGES.find((x) => x.code === ctx.match[1]);
+    if (!s.ui.childDraft || s.ui.childStep !== "age" || !a) return show(ctx, "childCreate");
+    s.ui.childDraft.age = a.code;
+    return nextChildStep(ctx);
+  });
+
+  // ----- Дневник -----
+  async function saveDiary(ctx) {
+    const s = ctx.session;
+    const d = s.ui.diary;
+    if (!d || !d.mood) return show(ctx, "diary");
+    const c = await loadChild(ctx);
+    if (!c) return show(ctx, "needChild");
+    try {
+      await children.addDiary(c.id, { date: isoDate(kzToday()), mood: d.mood, tags: d.tags, note: d.note || null });
+    } catch (err) {
+      logError("diary", err);
+      s.ui.err = t(s, "diarySaveFail");
+      return show(ctx, "diaryNote");
+    }
+    s.ui.diary = null;
+    return show(ctx, "diaryDone");
+  }
+
+  bot.callbackQuery(/^dm:(\w+)$/, (ctx) => {
+    const s = ctx.session;
+    if (!DIARY_MOODS.some((m) => m.code === ctx.match[1])) return show(ctx, "diary");
+    s.ui.diary = { mood: ctx.match[1], tags: [], note: null };
+    return show(ctx, "diaryTags");
+  });
+
+  bot.callbackQuery(/^dt:(\w+)$/, (ctx) => {
+    const s = ctx.session;
+    const d = s.ui.diary;
+    if (!d || !d.mood) return show(ctx, "diary");
+    const code = ctx.match[1];
+    if (code === "done") return show(ctx, "diaryNote");
+    if (DIARY_TAGS.some((x) => x.code === code)) {
+      const at = d.tags.indexOf(code);
+      if (at !== -1) d.tags.splice(at, 1); else d.tags.push(code);
+    }
+    return show(ctx, "diaryTags");
+  });
+
+  bot.callbackQuery(/^dn:(write|skip)$/, (ctx) => {
+    const s = ctx.session;
+    if (!s.ui.diary || !s.ui.diary.mood) return show(ctx, "diary");
+    if (ctx.match[1] === "write") return show(ctx, "diaryWrite");
+    s.ui.diary.note = null;
+    return saveDiary(ctx);
+  });
+
+  // ----- Отчёт: отдельным сообщением без кнопок, чтобы его можно было переслать специалисту -----
+  bot.callbackQuery(/^rp:(\d+)$/, async (ctx) => {
+    const s = ctx.session;
+    const days = Number(ctx.match[1]);
+    if (REPORT_PERIODS.indexOf(days) === -1) return show(ctx, "report");
+    const c = await loadChild(ctx);
+    if (!c) return show(ctx, "needChild");
+    const to = kzToday();
+    const from = to - (days - 1) * DAY_MS;
+    const list = await children.diary(c.id, isoDate(from));
+    if (!list.length) { s.ui.err = t(s, "reportEmpty"); return show(ctx, "report"); }
+    await ctx.reply(reportText(s, c, list, from, to), { parse_mode: "HTML" });
+    s.msgId = null;
+    return show(ctx, "reportSent");
+  });
+
+  // ----- Маршрут новичка -----
+  bot.callbackQuery(/^nb:([acsb]):([\w-]+)$/, async (ctx) => {
+    const s = ctx.session;
+    const [, kind, code] = ctx.match;
+    const nb = s.ui.newbie || {};
+    if (kind === "a") {
+      if (!CHILD_AGES.some((x) => x.code === code)) return show(ctx, "newbie");
+      s.ui.newbie = { age: code, concern: null, been: null, budget: null };
+      return show(ctx, "newbieConcern");
+    }
+    if (kind === "c") {
+      if (!nb.age || !NEWBIE_CONCERNS.some((x) => x.code === code)) return show(ctx, "newbie");
+      nb.concern = code;
+      return show(ctx, "newbieSpec");
+    }
+    if (kind === "s") {
+      if (!nb.concern || !NEWBIE_BEEN.some((x) => x.code === code)) return show(ctx, "newbieConcern");
+      nb.been = code;
+      return show(ctx, "newbieBudget");
+    }
+    if (!nb.been || !NEWBIE_BUDGETS.some((x) => x.code === code)) return show(ctx, "newbieSpec");
+    nb.budget = code;
+    // Маршрут сохраняется для статистики фонда; ошибка записи не мешает его показать.
+    try {
+      await children.saveRoute({ chat_id: ctx.chat.id, child_age: nb.age, concern: nb.concern, been_to_specialist: nb.been,
+        budget: nb.budget, route_text: routeText(s, nb).replace(/<[^>]+>/g, "").slice(0, 4000) });
+    } catch (err) { logError("newbie_routes", err); }
+    return show(ctx, "newbieResult");
+  });
+
   // ----- Ввод текстом: город, имя и фамилия, телефон, своя сумма -----
   async function onPhone(ctx, raw) {
     const s = ctx.session;
@@ -1524,6 +2052,58 @@ export function createBot(deps) {
       if (!(n >= 0 && n <= BUDGET_MAX)) { s.ui.tmpBudget = null; s.ui.err = t(s, "budgetErr"); return show(ctx, "budget"); }
       s.ui.tmpBudget = n;
       return show(ctx, "budget");
+    }
+
+    // Карточка ребёнка: имя, диагнозы, специалисты, аллергии, лекарства (возраст — кнопками).
+    if (screen === "childCreate" && s.ui.childDraft) {
+      await ctx.deleteMessage().catch(() => {});
+      const d = s.ui.childDraft;
+      const step = s.ui.childStep;
+      const v = text.replace(/\s+/g, " ").trim();
+      if (step === "name") {
+        if (!v || v.length > 40 || !CHILD_NAME_RE.test(v)) { s.ui.err = t(s, "childNameErr"); return show(ctx, "childCreate"); }
+        d.name = v;
+        return nextChildStep(ctx);
+      }
+      if (step === "diag") {
+        const list = text.split(/[,;\n]/).map((x) => x.replace(/\s+/g, " ").trim()).filter(Boolean);
+        if (!list.length || list.length > 10 || list.some((x) => x.length > 60)) { s.ui.err = t(s, "childDiagErr"); return show(ctx, "childCreate"); }
+        d.diagnoses = list;
+        return nextChildStep(ctx);
+      }
+      if (step === "spec") {
+        const sp = parseSpecialist(v);
+        if (!sp) { s.ui.err = t(s, "childSpecErr"); return show(ctx, "childCreate"); }
+        if (d.specialists.length >= 10) { s.ui.err = t(s, "childSpecLimit"); return show(ctx, "childCreate"); }
+        d.specialists.push(sp);
+        return show(ctx, "childCreate"); // ждём следующего или «Готово»
+      }
+      if (step === "allergy" || step === "meds") {
+        if (!v || v.length > 300) { s.ui.err = t(s, "childTextErr"); return show(ctx, "childCreate"); }
+        if (step === "allergy") d.allergies = v; else d.medications = v;
+        return nextChildStep(ctx);
+      }
+      s.ui.err = t(s, "pickButton");
+      return show(ctx, "childCreate");
+    }
+
+    if (screen === "childAddSpec") {
+      await ctx.deleteMessage().catch(() => {});
+      const c = await loadChild(ctx);
+      if (!c) return show(ctx, "childCard");
+      const sp = parseSpecialist(text);
+      if (!sp) { s.ui.err = t(s, "childSpecErr"); return show(ctx, "childAddSpec"); }
+      if ((c.specialists || []).length >= 10) { s.ui.err = t(s, "childSpecLimit"); return show(ctx, "childCard"); }
+      await children.addSpecialist(c.id, sp);
+      s.ui.flash = t(s, "childSpecAdded", { name: sp.name, spec: sp.specialty });
+      return show(ctx, "childCard");
+    }
+
+    if (screen === "diaryWrite" && s.ui.diary && s.ui.diary.mood) {
+      await ctx.deleteMessage().catch(() => {});
+      if (!text || text.length > 500) { s.ui.err = t(s, "diaryNoteErr"); return show(ctx, "diaryWrite"); }
+      s.ui.diary.note = text;
+      return saveDiary(ctx);
     }
 
     // Бот не ждёт текста: показываем текущий шаг заново внизу чата.
