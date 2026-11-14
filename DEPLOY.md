@@ -45,6 +45,12 @@
 `python supabase/demo/gen_demo_child.py <chat_id> > demo.sql`, затем `psql "<строка подключения>" -f demo.sql`.
 Если прямой адрес БД недоступен (нет IPv6) — пулер: `host=aws-1-ap-south-1.pooler.supabase.com user=postgres.<ref>`.
 
+## Карточка специалиста с отзывами (сайт)
+`landing/specialist.html?id=<id>&lang=ru|kk` — профиль и отзывы родителей; кнопка «🌐 Карточка и отзывы на сайте»
+в карточке специалиста в боте ведёт сюда. Данные — Supabase REST по публичному ключу из `landing/config.js`.
+Отзывы — `public.specialist_reviews` (сейчас только вымышленные демо, `is_demo`), генератор `supabase/demo/gen_reviews.py`.
+Сайт выкладывается сам при пуше в main (Vercel подключён к GitHub).
+
 ## Демо-специалисты
 Таблица `public.specialists` — 536 вымышленных профилей (`is_demo = true`), чтение открыто, запись только service_role.
 Набор генерирует `supabase/demo/gen_specialists.py` (детерминированно): у каждой комбинации условий поиска есть хотя бы

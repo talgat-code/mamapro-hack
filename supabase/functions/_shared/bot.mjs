@@ -441,6 +441,8 @@ export function createBot(deps) {
     return pr.minutes ? t(s, "priceFmt", { price, min: pr.minutes }) : esc(price);
   };
   const profile = (id) => specList.find((x) => x.id === id) || null;
+  // Карточка специалиста с отзывами родителей на сайте (landing/specialist.html).
+  const siteCardUrl = (s, pr) => SITE_URL + "/specialist.html?id=" + encodeURIComponent(pr.id) + "&lang=" + L(s);
   const canRequest = (pr) => pr.availability === "available";
   // Годы опыта: по-русски склоняем (1 год, 3 года, 5 лет), по-казахски «жыл» не меняется.
   const yearsRu = (n) => n + " " + (n % 10 === 1 && n % 100 !== 11 ? "год"
@@ -932,7 +934,7 @@ export function createBot(deps) {
       const pr = list[i];
       const text = [t(s, "resultsTitle", { i: i + 1, n: list.length }), ""].concat(cardLines(s, pr))
         .concat(["", "<i>" + t(s, "demoMark") + "</i>"]).join("\n");
-      const k = kb().text(t(s, "btnMore"), "card:" + pr.id).row();
+      const k = kb().text(t(s, "btnMore"), "card:" + pr.id).row().url(t(s, "btnSiteCard"), siteCardUrl(s, pr)).row();
       k.text(t(s, s.q.fav.indexOf(pr.id) !== -1 ? "btnUnfav" : "btnFav"), "fav:" + pr.id)
         .text(t(s, s.q.cmp.indexOf(pr.id) !== -1 ? "btnUncmp" : "btnCmp"), "cmp:" + pr.id).row();
       if (i > 0) k.text("‹ " + t(s, "btnPrev"), "res:" + (i - 1));
@@ -957,6 +959,7 @@ export function createBot(deps) {
       const text = lines.join("\n");
       const k = kb();
       if (canRequest(pr)) k.text(t(s, "btnPrepare"), "prep:" + pr.id).row();
+      k.url(t(s, "btnSiteCard"), siteCardUrl(s, pr)).row();
       k.text(t(s, s.q.fav.indexOf(pr.id) !== -1 ? "btnUnfav" : "btnFav"), "fav:" + pr.id)
         .text(t(s, s.q.cmp.indexOf(pr.id) !== -1 ? "btnUncmp" : "btnCmp"), "cmp:" + pr.id).row();
       if (s.q.cmp.length) k.text(t(s, "btnOpenCmp"), "go:compare").row();

@@ -421,6 +421,7 @@ export const TEXT = {
     storiesDemo: "Демо: истории вымышлены.", storiesEmpty: "Истории пока не загружены.",
     lStoryChild: "Ребёнок", lStoryConcern: "С чем пришли", lStorySpecs: "Специалисты", lStoryPeriod: "Период",
     storyPeriod: "с {date}, {n} нед.", lMilestones: "Как менялось", milestone: "Неделя {n}: {text}", lHelped: "Что помогло",
+    btnSiteCard: "🌐 Карточка и отзывы на сайте",
     btnStoryProgress: "📈 Прогресс по неделям", btnAllStories: "← Все истории", btnStory: "📖 {title}",
     genericError: "Что-то пошло не так. Ваши ответы сохранены. Попробуйте ещё раз.",
 
@@ -693,6 +694,7 @@ export const TEXT = {
     storiesDemo: "Демо: тарихтар ойдан шығарылған.", storiesEmpty: "Тарихтар әзірге жүктелмеген.",
     lStoryChild: "Бала", lStoryConcern: "Немен келді", lStorySpecs: "Мамандар", lStoryPeriod: "Кезең",
     storyPeriod: "{date} бастап, {n} апта", lMilestones: "Қалай өзгерді", milestone: "{n}-апта: {text}", lHelped: "Не көмектесті",
+    btnSiteCard: "🌐 Сайттағы карточка мен пікірлер",
     btnStoryProgress: "📈 Апта бойынша прогресс", btnAllStories: "← Барлық тарихтар", btnStory: "📖 {title}",
     genericError: "Бірдеңе дұрыс болмады. Жауаптарыңыз сақталды. Қайталап көріңіз.",
 

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Карточка специалиста — I-Help</title>
+  <meta name="description" content="Карточка специалиста I-Help: формат, языки, цена и отзывы родителей.">
+  <meta name="theme-color" content="#FCF4DF">
+  <link rel="icon" type="image/png" href="logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap&subset=cyrillic" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Перейти к содержимому</a>
+
+  <header class="header">
+    <div class="container header__inner">
+      <a class="brand" href="index.html" aria-label="I-Help — на главную">
+        <img class="brand__logo" src="logo.png" alt="" width="52" height="52">
+        <span class="brand__name">I-Help</span>
+      </a>
+      <a class="btn btn--ghost btn--small header__cta" href="index.html">На главную</a>
+      <button class="lang-switch" type="button" data-lang-toggle data-no-i18n lang="kk" aria-label="Қазақ тіліне ауыстыру">ҚАЗ</button>
+      <a class="profile-link" href="account.html" aria-label="Личный кабинет: вход или регистрация" title="Личный кабинет">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm0 2c-4.4 0-8 2.3-8 5.2V21h16v-1.8c0-2.9-3.6-5.2-8-5.2Z"/></svg>
+      </a>
+    </div>
+  </header>
+
+  <main id="main" class="section">
+    <div class="container spec-page" id="spec-root" data-no-i18n aria-live="polite">
+      <p class="panel__note">Загрузка…</p>
+    </div>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="i18n.js"></script>
+  <script src="specialist.js"></script>
+</body>
+</html>
