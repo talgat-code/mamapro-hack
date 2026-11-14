@@ -2,6 +2,7 @@
   var cfg = window.APP_CONFIG || {};
   var reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   var each = function (list, fn) { Array.prototype.forEach.call(list, fn); };
+  var t = function (s, vars) { return window.I18N ? window.I18N.t(s, vars) : s; };
 
   /* ---------- Кнопки мессенджеров: ссылки из APP_CONFIG ---------- */
   each(document.querySelectorAll("a[data-config-url]"), function (a) {
@@ -55,8 +56,8 @@
 
   form.addEventListener("submit", async function (e) {
     e.preventDefault();
-    if (!form.elements.consent.checked) return show("Отметьте согласие на обработку персональных данных.", false);
-    if (!client) return show("Ошибка, попробуйте позже.", false);
+    if (!form.elements.consent.checked) return show(t("Отметьте согласие на обработку персональных данных."), false);
+    if (!client) return show(t("Ошибка, попробуйте позже."), false);
 
     var data = new FormData(form);
     var row = {
@@ -66,14 +67,14 @@
     };
 
     btn.disabled = true;
-    btn.textContent = "Отправляем…";
+    btn.textContent = t("Отправляем…");
     var res = await client.from("leads").insert(row);
     btn.disabled = false;
-    btn.textContent = "Отправить заявку";
+    btn.textContent = t("Отправить заявку");
 
-    if (res.error) return show("Ошибка, попробуйте позже.", false);
+    if (res.error) return show(t("Ошибка, попробуйте позже."), false);
     form.reset();
-    show("Спасибо, мы свяжемся!", true);
+    show(t("Спасибо, мы свяжемся!"), true);
   });
 
   /* ---------- Мини-опрос «Подберём специалиста» ---------- */
@@ -136,10 +137,10 @@
 
   function render(moveFocus) {
     steps.forEach(function (s, i) { s.hidden = i !== current; });
-    progress.textContent = "Шаг " + (current + 1) + " из " + steps.length;
+    progress.textContent = t("Шаг {n} из {total}", { n: current + 1, total: steps.length });
     bar.style.width = ((current + 1) / steps.length * 100) + "%";
     back.hidden = current === 0;
-    next.textContent = current === steps.length - 1 ? "Подобрать специалиста" : "Далее";
+    next.textContent = t(current === steps.length - 1 ? "Подобрать специалиста" : "Далее");
     error.textContent = "";
     if (moveFocus) steps[current].focus({ preventScroll: true });
   }
@@ -162,7 +163,7 @@
   quiz.addEventListener("submit", function (e) {
     e.preventDefault();
     if (!isFilled(steps[current])) {
-      error.textContent = steps[current].getAttribute("data-step") === "topic" ? "Выберите хотя бы один вариант." : "Выберите один вариант.";
+      error.textContent = t(steps[current].getAttribute("data-step") === "topic" ? "Выберите хотя бы один вариант." : "Выберите один вариант.");
       return;
     }
     if (current < steps.length - 1) { current++; render(true); } else { showResult(); }
@@ -180,7 +181,8 @@
       names: names
     };
 
-    document.getElementById("quiz-result-title").textContent = "Вам может подойти: " + names.join(" или ");
+    var shown = names.map(function (n) { return t(n); });
+    document.getElementById("quiz-result-title").textContent = t("Вам может подойти: {names}", { names: shown.join(" " + t("или") + " ") });
 
     var list = document.getElementById("quiz-recs");
     list.textContent = "";
@@ -190,17 +192,18 @@
       var li = document.createElement("li");
       var a = document.createElement("a");
       a.href = "#spec-" + key;
-      a.textContent = RULES.names[key].charAt(0).toUpperCase() + RULES.names[key].slice(1);
+      var name = t(RULES.names[key]);
+      a.textContent = name.charAt(0).toUpperCase() + name.slice(1);
       li.appendChild(a);
       if (desc) li.appendChild(document.createTextNode(" — " + desc.textContent));
       list.appendChild(li);
     });
 
     var why = topics.indexOf(DONT_KNOW) !== -1
-      ? "Вы не знаете, с чего начать, — предлагаем начать с дефектолога как с общего ориентира."
-      : "Подобрано по вашему запросу: " + topics.join("; ") + ".";
-    if (rec.cut) why += " Запросов несколько, поэтому показаны два самых близких типа специалистов — остальное можно обсудить при подборе.";
-    why += " Возраст, формат и город попадут в текст заявки — вы сможете их поправить.";
+      ? t("Вы не знаете, с чего начать, — предлагаем начать с дефектолога как с общего ориентира.")
+      : t("Подобрано по вашему запросу: {topics}.", { topics: topics.map(function (x) { return t(x); }).join("; ") });
+    if (rec.cut) why += " " + t("Запросов несколько, поэтому показаны два самых близких типа специалистов — остальное можно обсудить при подборе.");
+    why += " " + t("Возраст, формат и город попадут в текст заявки — вы сможете их поправить.");
     document.getElementById("quiz-why").textContent = why;
 
     quiz.hidden = true;
@@ -237,6 +240,15 @@
     quiz.hidden = false;
     render(true);
     document.getElementById("quiz").scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  });
+
+  // Смена языка: перерисовываем то, что собрано скриптом
+  document.addEventListener("langchange", function () {
+    var errShown = !!error.textContent;
+    render(false);
+    if (errShown) error.textContent = "";
+    if (!result.hidden) showResult();
+    if (!btn.disabled) btn.textContent = t("Отправить заявку");
   });
 
   render(false);

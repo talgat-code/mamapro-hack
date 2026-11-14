@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Личный кабинет — I-Help</title>
+  <meta name="description" content="Вход и регистрация в I-Help: кабинет родителя, специалиста и организатора.">
+  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#FCF4DF">
+  <link rel="icon" type="image/png" href="logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap&subset=cyrillic" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Перейти к содержимому</a>
+
+  <header class="header">
+    <div class="container header__inner">
+      <a class="brand" href="index.html" aria-label="I-Help — на главную">
+        <img class="brand__logo" src="logo.png" alt="" width="52" height="52">
+        <span class="brand__name">I-Help</span>
+      </a>
+      <a class="btn btn--ghost btn--small header__cta" href="index.html">На главную</a>
+      <button class="lang-switch" type="button" data-lang-toggle data-no-i18n lang="kk" aria-label="Қазақ тіліне ауыстыру">ҚАЗ</button>
+    </div>
+  </header>
+
+  <main id="main" class="section account">
+    <div class="container account__inner">
+      <p class="acc-status" id="acc-status" role="status" aria-live="polite"></p>
+
+      <!-- Гость: вход и регистрация -->
+      <section id="view-guest" hidden>
+        <h1 class="acc-title">Личный кабинет</h1>
+        <p class="section__lead">Сайтом можно пользоваться без регистрации. Кабинет нужен, чтобы видеть свои заявки, сохранить данные ребёнка или вести карточку специалиста.</p>
+
+        <div class="tabs" role="tablist" aria-label="Вход или регистрация">
+          <button class="tab" type="button" role="tab" id="tab-login" aria-selected="true" aria-controls="login-form">Вход</button>
+          <button class="tab" type="button" role="tab" id="tab-signup" aria-selected="false" aria-controls="signup-form">Регистрация</button>
+        </div>
+
+        <form class="form" id="login-form" role="tabpanel" aria-labelledby="tab-login">
+          <label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
+          <label class="field"><span>Пароль</span><input type="password" name="password" required minlength="8" autocomplete="current-password"></label>
+          <button class="btn btn--block" type="submit">Войти</button>
+        </form>
+
+        <form class="form" id="signup-form" role="tabpanel" aria-labelledby="tab-signup" hidden>
+          <fieldset class="role-pick">
+            <legend class="field-legend">Кто вы?</legend>
+            <label class="option"><input type="radio" name="role" value="parent" checked><span>Родитель</span></label>
+            <label class="option"><input type="radio" name="role" value="specialist"><span>Специалист (логопед, педагог, врач…)</span></label>
+          </fieldset>
+          <label class="field"><span>Имя</span><input type="text" name="full_name" required maxlength="100" autocomplete="name"></label>
+          <label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
+          <label class="field"><span>Пароль (не короче 8 символов)</span><input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+          <div class="consent">
+            <label class="consent__label">
+              <input type="checkbox" name="consent" required aria-describedby="signup-consent-note">
+              <span>Я согласен(на) на обработку персональных данных</span>
+            </label>
+            <p class="consent__note" id="signup-consent-note">Данные нужны только для работы кабинета и связи с вами. Удалить аккаунт можно по запросу (пример: порядок удаления будет описан).</p>
+          </div>
+          <button class="btn btn--block" type="submit">Зарегистрироваться</button>
+        </form>
+      </section>
+
+      <!-- Общая шапка кабинета -->
+      <section id="view-user" hidden>
+        <div class="acc-head">
+          <div>
+            <p class="quiz__kicker" id="acc-role"></p>
+            <h1 class="acc-title" id="acc-hello"></h1>
+          </div>
+          <button class="btn btn--ghost btn--small" type="button" id="logout">Выйти</button>
+        </div>
+
+        <div class="acc-grid">
+          <!-- Профиль: у всех ролей -->
+          <section class="panel" aria-labelledby="p-profile">
+            <h2 class="panel__title" id="p-profile">Мои данные</h2>
+            <form class="stack" id="profile-form">
+              <label class="field"><span>Имя</span><input type="text" name="full_name" maxlength="100" autocomplete="name"></label>
+              <label class="field"><span>Телефон (по желанию)</span><input type="tel" name="phone" maxlength="30" autocomplete="tel"></label>
+              <label class="field"><span>Город (по желанию)</span><input type="text" name="city" maxlength="60" autocomplete="address-level2"></label>
+              <button class="btn" type="submit">Сохранить</button>
+            </form>
+          </section>
+
+          <!-- Родитель -->
+          <section class="panel" data-role="parent" aria-labelledby="p-children" hidden>
+            <h2 class="panel__title" id="p-children">Мой ребёнок</h2>
+            <p class="panel__note">Храним только прозвище, возраст, запрос и город. Диагнозы и документы сюда не вносите.</p>
+            <ul class="items" id="children-list"></ul>
+            <form class="stack" id="child-form">
+              <label class="field"><span>Как зовём ребёнка (имя или прозвище)</span><input type="text" name="nickname" required maxlength="40"></label>
+              <label class="field"><span>Возраст</span>
+                <select name="age_group" required>
+                  <option value="до 3">До 3 лет</option>
+                  <option value="3–6">3–6 лет</option>
+                  <option value="7–12">7–12 лет</option>
+                  <option value="13+">13+ лет</option>
+                </select>
+              </label>
+              <fieldset class="checks">
+                <legend class="field-legend">С чем нужна помощь</legend>
+                <label><input type="checkbox" name="topics" value="речь"> Речь</label>
+                <label><input type="checkbox" name="topics" value="поведение и эмоции"> Поведение и эмоции</label>
+                <label><input type="checkbox" name="topics" value="обучение и внимание"> Обучение и внимание</label>
+                <label><input type="checkbox" name="topics" value="моторика и движение"> Моторика и движение</label>
+                <label><input type="checkbox" name="topics" value="не знаю"> Пока не знаю</label>
+              </fieldset>
+              <label class="field"><span>Город (по желанию)</span><input type="text" name="city" maxlength="60"></label>
+              <label class="consent__label">
+                <input type="checkbox" name="guardian" required>
+                <span>Я законный представитель ребёнка и согласен(на) на обработку этих данных</span>
+              </label>
+              <button class="btn" type="submit">Добавить</button>
+            </form>
+          </section>
+
+          <section class="panel" data-role="parent" aria-labelledby="p-leads" hidden>
+            <h2 class="panel__title" id="p-leads">Мои заявки</h2>
+            <p class="panel__note">Здесь видны заявки, отправленные с сайта, когда вы были в кабинете.</p>
+            <ul class="items" id="leads-list"></ul>
+            <a class="btn btn--ghost btn--small" href="index.html#quiz">Подобрать специалиста</a>
+          </section>
+
+          <!-- Специалист -->
+          <section class="panel" data-role="specialist" aria-labelledby="p-card" hidden>
+            <h2 class="panel__title" id="p-card">Моя карточка</h2>
+            <p class="panel__note" id="card-state"></p>
+            <form class="stack" id="card-form">
+              <label class="field"><span>Имя в карточке</span><input type="text" name="display_name" required maxlength="100"></label>
+              <label class="field"><span>Специальность</span><select name="specialty_code" data-codes="specialty" required></select></label>
+              <label class="field"><span>Город</span><select name="city" data-codes="city"></select></label>
+              <fieldset class="checks"><legend class="field-legend">Формат</legend><label><input type="checkbox" name="formats" value="on"> Онлайн</label><label><input type="checkbox" name="formats" value="off"> Очно</label></fieldset>
+              <label class="field"><span>О себе</span><textarea name="about" rows="5" maxlength="1000" placeholder="Опыт, подход, с какими запросами работаете"></textarea></label>
+              <button class="btn" type="submit">Отправить на проверку</button>
+            </form>
+          </section>
+
+          <section class="panel" data-role="specialist" aria-labelledby="p-changes" hidden>
+            <h2 class="panel__title" id="p-changes">Мои правки</h2>
+            <p class="panel__note">Изменения появятся в карточке после одобрения организаторами.</p>
+            <ul class="items" id="my-changes"></ul>
+          </section>
+
+          <!-- Организатор -->
+          <section class="panel panel--wide" data-role="admin" aria-labelledby="p-review" hidden>
+            <h2 class="panel__title" id="p-review">Правки на проверке</h2>
+            <ul class="items" id="review-list"></ul>
+          </section>
+
+          <section class="panel panel--wide" data-role="admin" aria-labelledby="p-specs" hidden>
+            <h2 class="panel__title" id="p-specs">Специалисты</h2>
+            <ul class="items" id="spec-list"></ul>
+            <details class="add-box">
+              <summary class="btn btn--ghost btn--small">Добавить специалиста</summary>
+              <form class="stack" id="spec-add-form">
+                <label class="field"><span>Имя</span><input type="text" name="display_name" required maxlength="100"></label>
+                <label class="field"><span>Специальность</span><select name="specialty_code" data-codes="specialty" required></select></label>
+                <label class="field"><span>Город</span><select name="city" data-codes="city"></select></label>
+                <fieldset class="checks"><legend class="field-legend">Формат</legend><label><input type="checkbox" name="formats" value="on"> Онлайн</label><label><input type="checkbox" name="formats" value="off"> Очно</label></fieldset>
+                <label class="field"><span>О специалисте</span><textarea name="about" rows="5" maxlength="1000"></textarea></label>
+                <button class="btn" type="submit">Добавить черновик</button>
+              </form>
+            </details>
+          </section>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer footer--slim">
+    <div class="container footer__bottom">
+      <p>Сделано командой Aibolit в рамках Mama Pro Social Impact Hackathon</p>
+    </div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="i18n.js"></script>
+  <script src="account.js"></script>
+</body>
+</html>

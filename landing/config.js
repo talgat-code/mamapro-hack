@@ -3,6 +3,6 @@ window.APP_CONFIG = {
   SUPABASE_URL: "https://YOUR-PROJECT-REF.supabase.co",
   SUPABASE_ANON_KEY: "YOUR-ANON-KEY",
   // Заглушки — замените на реальные ссылки. Пустая строка скроет кнопку.
-  TELEGRAM_URL: "https://t.me/REPLACE_ME",
+  TELEGRAM_URL: "https://t.me/mamapro_helper_bot",
   WHATSAPP_URL: "https://wa.me/77000000000"
 };
