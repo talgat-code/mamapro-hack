@@ -1,0 +1,15 @@
+{
+  "name": "mama-pro-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram-бот Mama Pro: подбор типа специалиста, FAQ и заявка (демо хакатона)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.5",
+    "grammy": "^1.30.0"
+  }
+}
