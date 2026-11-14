@@ -14,7 +14,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ENV_FILE) });
 const { Bot, InlineKeyboard, InputFile, session, API_CONSTANTS } = require("grammy");
 const { createClient } = require("@supabase/supabase-js");
 
-const { BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY, BOT_API_BASE, BOT_TEST_ENV, STAFF_CHAT_ID } = process.env;
+const { BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY, BOT_API_BASE, BOT_TEST_ENV, STAFF_CHAT_ID, MINIAPP_URL } = process.env;
 // Эксперимент с виджетами (bot/widget): выключен, пока не задано WIDGETS_ENABLED=1.
 const WIDGETS_ENABLED = process.env.WIDGETS_ENABLED === "1";
 const FORCE_POLLING = process.argv.indexOf("--force-polling") !== -1;
@@ -59,6 +59,7 @@ async function main() {
     // Демо-профили специалистов из public.specialists (чтение открыто); без Supabase — встроенный запасной набор.
     loadSpecialists: supabase ? shared.supabaseSpecialistSource(supabase) : null,
     staffChatId: STAFF_CHAT_ID,
+    miniappUrl: MINIAPP_URL,
     logError: logError,
     extend: WIDGETS_ENABLED ? function (b, d) { require("./widget").setupWidgets(b, d); } : null
   });
