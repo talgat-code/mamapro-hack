@@ -162,44 +162,241 @@
     say(t("Данные сохранены."), true);
   });
 
-  /* ---------- Родитель ---------- */
+  /* ---------- Родитель: карточка ребёнка ---------- */
+  var kids = []; // карточки детей текущего родителя (с полем specialists)
+  var editId = null;
+
+  // «Айгуль — логопед», «Айгуль - логопед», «Айгуль: логопед», «Айгуль, логопед».
+  function parseSpecialist(line) {
+    var v = line.replace(/\s+/g, " ").trim();
+    var seps = [/\s*[—–]\s*/, /\s+-\s+/, /\s*[:,]\s*/];
+    for (var i = 0; i < seps.length; i++) {
+      var m = seps[i].exec(v);
+      if (!m) continue;
+      var name = v.slice(0, m.index).trim(), spec = v.slice(m.index + m[0].length).trim();
+      return name && spec && name.length <= 60 && spec.length <= 60 ? { name: name, specialty: spec } : null;
+    }
+    return null;
+  }
+
+  function fillChildSelects() {
+    Array.prototype.forEach.call(document.querySelectorAll("select[data-child-select]"), function (sel) {
+      var keep = sel.value;
+      sel.textContent = "";
+      kids.forEach(function (c) { sel.appendChild(new Option(c.nickname, c.id)); });
+      if (keep) sel.value = keep;
+      sel.closest("form").querySelector("button[type=submit]").disabled = !kids.length;
+    });
+  }
+
+  function childMeta(c) {
+    var lines = [t("{age} лет", { age: c.age_group }) + (c.topics.length ? " · " + c.topics.map(function (x) { return t(x); }).join(", ") : "") + (c.city ? " · " + c.city : "")];
+    var none = t("нет");
+    lines.push("📌 " + t("Диагнозы") + ": " + (c.diagnoses && c.diagnoses.length ? c.diagnoses.join(", ") : none));
+    lines.push("👨‍⚕️ " + t("Специалисты") + ": " + (c.specialists.length ? c.specialists.map(function (s) { return s.name + " — " + s.specialty; }).join("; ") : none));
+    lines.push("💊 " + t("Лекарства") + ": " + (c.medications || none));
+    lines.push("⚠️ " + t("Аллергии") + ": " + (c.allergies || none));
+    return lines.join("\n");
+  }
+
+  function resetChildForm() {
+    var f = $("child-form");
+    f.reset();
+    editId = null;
+    $("child-form-title").textContent = t("Новая карточка");
+    $("child-submit").textContent = t("Добавить");
+    $("child-cancel").hidden = true;
+  }
+
+  function editChild(c) {
+    var f = $("child-form");
+    editId = c.id;
+    f.elements.nickname.value = c.nickname;
+    f.elements.age_group.value = c.age_group;
+    Array.prototype.forEach.call(f.querySelectorAll('input[name="topics"]'), function (i) { i.checked = c.topics.indexOf(i.value) !== -1; });
+    f.elements.city.value = c.city || "";
+    f.elements.diagnoses.value = (c.diagnoses || []).join(", ");
+    f.elements.specialists.value = c.specialists.map(function (s) { return s.name + " — " + s.specialty; }).join("\n");
+    f.elements.medications.value = c.medications || "";
+    f.elements.allergies.value = c.allergies || "";
+    $("child-form-title").textContent = t("Редактирование: {name}", { name: c.nickname });
+    $("child-submit").textContent = t("Сохранить");
+    $("child-cancel").hidden = false;
+    f.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   async function loadChildren() {
-    var res = await sb.from("children").select("id, nickname, age_group, topics, city").order("created_at");
+    var res = await sb.from("children").select("id, nickname, age_group, topics, city, diagnoses, allergies, medications, child_specialists(name, specialty, created_at)").order("created_at");
     if (res.error) return fail(res.error);
+    kids = res.data.map(function (c) {
+      c.specialists = (c.child_specialists || []).sort(function (a, b) { return a.created_at < b.created_at ? -1 : 1; });
+      return c;
+    });
     var list = $("children-list");
     list.textContent = "";
-    res.data.forEach(function (c) {
+    kids.forEach(function (c) {
       var li = el("li", "items__row");
       var info = el("div");
-      info.appendChild(el("strong", null, c.nickname));
-      info.appendChild(el("p", "items__meta", t("{age} лет", { age: c.age_group }) + (c.topics.length ? " · " + c.topics.map(function (x) { return t(x); }).join(", ") : "") + (c.city ? " · " + c.city : "")));
+      info.appendChild(el("strong", null, "👦 " + c.nickname));
+      info.appendChild(el("p", "items__meta", childMeta(c)));
       li.appendChild(info);
-      li.appendChild(button(t("Удалить"), "btn--ghost", async function () {
-        if (!confirm(t("Удалить данные ребёнка «{name}»?", { name: c.nickname }))) return;
+      var actions = el("div", "items__actions");
+      actions.appendChild(button(t("Изменить"), "", function () { editChild(c); }));
+      actions.appendChild(button(t("Удалить"), "btn--ghost", async function () {
+        if (!confirm(t("Удалить карточку «{name}» вместе с дневником? Это нельзя отменить.", { name: c.nickname }))) return;
         var r = await sb.from("children").delete().eq("id", c.id);
         if (r.error) return fail(r.error);
+        if (editId === c.id) resetChildForm();
         loadChildren();
       }));
+      li.appendChild(actions);
       list.appendChild(li);
     });
     emptyNote(list, t("Пока никого не добавили."));
+    fillChildSelects();
+    loadDiaryMonth().catch(fail);
   }
+
+  $("child-cancel").addEventListener("click", resetChildForm);
 
   $("child-form").addEventListener("submit", async function (e) {
     e.preventDefault();
     var f = e.target;
     if (!f.elements.guardian.checked) return say(t("Подтвердите, что вы законный представитель ребёнка."), false);
     var topics = Array.prototype.map.call(f.querySelectorAll('input[name="topics"]:checked'), function (i) { return i.value; });
-    var res = await sb.from("children").insert({
+    var diagnoses = f.elements.diagnoses.value.split(/[,;]/).map(function (x) { return x.trim(); }).filter(Boolean);
+    if (diagnoses.length > 10 || diagnoses.some(function (x) { return x.length > 60; })) return say(t("До 10 диагнозов, каждый до 60 символов."), false);
+    var specLines = f.elements.specialists.value.split("\n").map(function (x) { return x.trim(); }).filter(Boolean);
+    var specs = specLines.map(parseSpecialist);
+    if (specs.indexOf(null) !== -1) return say(t("Специалистов пишите по одному в строке: Имя — специальность."), false);
+    if (specs.length > 10) return say(t("В карточке может быть до 10 специалистов."), false);
+    var row = {
       nickname: f.elements.nickname.value.trim(),
       age_group: f.elements.age_group.value,
       topics: topics,
-      city: f.elements.city.value.trim() || null
+      city: f.elements.city.value.trim() || null,
+      diagnoses: diagnoses,
+      medications: f.elements.medications.value.trim() || null,
+      allergies: f.elements.allergies.value.trim() || null
+    };
+    var res = editId
+      ? await sb.from("children").update(row).eq("id", editId).select("id").single()
+      : await sb.from("children").insert(row).select("id").single();
+    if (res.error) return fail(res.error);
+    var id = res.data.id;
+    // Список специалистов заменяется целиком.
+    var del = await sb.from("child_specialists").delete().eq("child_id", id);
+    if (del.error) return fail(del.error);
+    if (specs.length) {
+      var ins = await sb.from("child_specialists").insert(specs.map(function (s) { return { child_id: id, name: s.name, specialty: s.specialty }; }));
+      if (ins.error) return fail(ins.error);
+    }
+    say(editId ? t("Карточка сохранена.") : t("Ребёнок добавлен."), true);
+    resetChildForm();
+    loadChildren();
+  });
+
+  /* ---------- Родитель: дневник ---------- */
+  var MOOD_ICON = { good: "😊", normal: "😐", bad: "😢" };
+  // Дата по местному времени браузера в формате YYYY-MM-DD.
+  function isoLocal(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function moodCounts(list) {
+    var c = { good: 0, normal: 0, bad: 0 };
+    list.forEach(function (e) { if (e.mood in c) c[e.mood] += 1; });
+    return c;
+  }
+
+  async function loadDiaryMonth() {
+    var out = $("diary-month");
+    var childId = document.querySelector("#diary-form select[name=child]").value;
+    var child = kids.filter(function (c) { return c.id === childId; })[0];
+    if (!child) { out.textContent = t("Сначала добавьте карточку ребёнка — дневник привязан к ней."); return; }
+    var now = new Date();
+    var res = await sb.from("diary_entries").select("mood").eq("child_id", child.id).gte("date", isoLocal(new Date(now.getFullYear(), now.getMonth(), 1)));
+    if (res.error) return fail(res.error);
+    var m = moodCounts(res.data);
+    var month = now.toLocaleDateString(window.I18N ? window.I18N.locale() : "ru-RU", { month: "long" });
+    out.textContent = t("За {month} у {name}: {good} 😊, {normal} 😐, {bad} 😢", { month: month, name: child.nickname, good: m.good, normal: m.normal, bad: m.bad });
+  }
+
+  document.querySelector("#diary-form select[name=child]").addEventListener("change", function () { loadDiaryMonth().catch(fail); });
+
+  $("diary-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var f = e.target;
+    var mood = f.querySelector('input[name="mood"]:checked');
+    if (!f.elements.child.value || !mood) return say(t("Выберите ребёнка и как прошёл день."), false);
+    if (f.elements.date.value > isoLocal(new Date())) return say(t("Дата не может быть в будущем."), false);
+    var res = await sb.from("diary_entries").insert({
+      child_id: f.elements.child.value,
+      date: f.elements.date.value,
+      mood: mood.value,
+      tags: Array.prototype.map.call(f.querySelectorAll('input[name="tags"]:checked'), function (i) { return i.value; }),
+      note: f.elements.note.value.trim() || null
     });
     if (res.error) return fail(res.error);
+    var keep = f.elements.child.value;
     f.reset();
-    say(t("Ребёнок добавлен."), true);
-    loadChildren();
+    f.elements.child.value = keep;
+    f.elements.date.value = isoLocal(new Date());
+    say(t("Записано! ✅"), true);
+    loadDiaryMonth().catch(fail);
+  });
+
+  /* ---------- Родитель: отчёт для специалиста ---------- */
+  var AGE_LABEL = { "до 3": "до 3 лет", "3–6": "3–6 лет", "7–12": "7–12 лет", "13+": "13+ лет" };
+  function dmy(iso) { var p = String(iso).split("-"); return p[2] + "." + p[1] + "." + p[0]; }
+
+  $("report-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var f = e.target;
+    var child = kids.filter(function (c) { return c.id === f.elements.child.value; })[0];
+    if (!child) return say(t("Сначала добавьте карточку ребёнка."), false);
+    var days = Number(f.elements.days.value);
+    var to = new Date();
+    var from = new Date(to.getFullYear(), to.getMonth(), to.getDate() - (days - 1));
+    var res = await sb.from("diary_entries").select("date, mood, tags, note, created_at").eq("child_id", child.id)
+      .gte("date", isoLocal(from)).lte("date", isoLocal(to)).order("date").order("created_at");
+    if (res.error) return fail(res.error);
+    var list = res.data;
+    if (!list.length) { $("report-box").hidden = true; return say(t("За этот период записей нет. Начните вести дневник!"), false); }
+    var has = function (e, code) { return (e.tags || []).indexOf(code) !== -1; };
+    var count = function (code) { return list.filter(function (e) { return has(e, code); }).length; };
+    var uniq = function (arr) { return arr.filter(function (v, i) { return arr.indexOf(v) === i; }).length; };
+    var m = moodCounts(list);
+    var SEP = "══════════════════════";
+    var lines = [SEP, t("📊 ОТЧЁТ О РАЗВИТИИ"), child.nickname + ", " + t(AGE_LABEL[child.age_group] || child.age_group),
+      t("Период: {from} – {to}", { from: dmy(isoLocal(from)), to: dmy(isoLocal(to)) }), SEP,
+      t("📈 Настроение: {good} 😊, {normal} 😐, {bad} 😢", m),
+      t("📌 Отметки: новые слова — {words}, истерики — {tantrums}, плохой сон — {sleep}, плохой аппетит — {eat}, лекарство — {meds}, д/з — {hw} из {days}", {
+        words: count("new_word"), tantrums: count("tantrum"), sleep: count("bad_sleep"), eat: count("bad_eat"), meds: count("medicine"),
+        hw: uniq(list.filter(function (e) { return has(e, "homework"); }).map(function (e) { return e.date; })),
+        days: uniq(list.map(function (e) { return e.date; }))
+      })];
+    var notes = list.filter(function (e) { return e.note; }).slice(-5);
+    if (notes.length) {
+      lines.push(t("💬 Заметки:"));
+      notes.forEach(function (e) { lines.push("• " + dmy(e.date) + " " + MOOD_ICON[e.mood] + ": " + e.note); });
+    } else lines.push(t("💬 Заметок нет."));
+    lines.push(SEP, t("Составлено по записям родителя в дневнике I-Help. Это наблюдения, а не медицинское заключение."));
+    $("report-out").textContent = lines.join("\n");
+    $("report-box").hidden = false;
+    say("");
+  });
+
+  $("report-copy").addEventListener("click", async function () {
+    try {
+      await navigator.clipboard.writeText($("report-out").textContent);
+      say(t("Отчёт скопирован — вставьте его в сообщение специалисту."), true);
+    } catch (err) { say(t("Не получилось скопировать — выделите текст вручную."), false); }
+  });
+  // Печатается только отчёт (см. @media print в style.css).
+  $("report-print").addEventListener("click", function () {
+    document.body.classList.add("printing-report");
+    window.print();
+    document.body.classList.remove("printing-report");
   });
 
   async function loadLeads() {
@@ -368,8 +565,15 @@
     } catch (err) { fail(err); }
   }
 
-  document.addEventListener("langchange", function () { say(""); load().catch(fail); });
+  document.addEventListener("langchange", function () {
+    say("");
+    if (editId) resetChildForm();
+    $("report-box").hidden = true;
+    load().catch(fail);
+  });
 
+  $("diary-form").elements.date.value = isoLocal(new Date());
+  $("diary-form").elements.date.max = isoLocal(new Date());
   if (location.hash === "#signup") setTab(false);
   load().catch(fail);
 })();

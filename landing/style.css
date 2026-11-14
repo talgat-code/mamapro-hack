@@ -357,6 +357,32 @@ h2 {
 .add-box summary { list-style: none; }
 .add-box summary::-webkit-details-marker { display: none; }
 .add-box[open] summary { margin-bottom: 16px; }
+.panel__sub { margin-top: 4px; color: var(--maroon); font-size: 1.15rem; }
+.report {
+  margin-bottom: 12px; padding: 16px; border-radius: 16px; background: var(--cream-2);
+  font: inherit; font-size: 0.95rem; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.field input[type="date"] {
+  min-height: 52px; padding: 12px 14px; border: 2px solid var(--line); border-radius: 14px;
+  background: var(--white); color: var(--text); font: inherit;
+}
+
+/* ---------- Маршрут новичка ---------- */
+.route { max-width: 760px; }
+.route__q { margin-bottom: 28px; border: 0; }
+.route__q .field-legend { font-size: 1.15rem; }
+.route__result { margin-top: 32px; }
+.route__steps { display: grid; gap: 14px; margin: 16px 0; padding: 0; list-style: none; counter-reset: step; }
+.route__steps li { padding: 16px 18px; border-radius: 16px; background: var(--cream-2); white-space: pre-line; }
+.route__steps b { color: var(--orange-dark); }
+.route__hint { margin-bottom: 12px; }
+.route__note { margin-bottom: 20px; color: var(--muted); font-size: 0.95rem; font-style: italic; }
+
+@media print {
+  body.printing-report * { visibility: hidden; }
+  body.printing-report #report-out, body.printing-report #report-out * { visibility: visible; }
+  body.printing-report #report-out { position: absolute; inset: 0 auto auto 0; background: none; }
+}
 .footer--slim { padding: 28px 0; }
 .footer--slim .footer__bottom { border-top: 0; padding-top: 0; }
 

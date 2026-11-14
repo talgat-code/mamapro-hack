@@ -90,11 +90,12 @@
           </section>
 
           <!-- Родитель -->
-          <section class="panel" data-role="parent" aria-labelledby="p-children" hidden>
-            <h2 class="panel__title" id="p-children">Мой ребёнок</h2>
-            <p class="panel__note">Храним только прозвище, возраст, запрос и город. Диагнозы и документы сюда не вносите.</p>
+          <section class="panel panel--wide" data-role="parent" aria-labelledby="p-children" hidden>
+            <h2 class="panel__title" id="p-children">📋 Карточка ребёнка</h2>
+            <p class="panel__note">Карточку видите только вы. Диагнозы, лекарства и аллергии — по желанию; документы и анализы сюда не загружайте. Удалить карточку можно в любой момент — вместе с дневником.</p>
             <ul class="items" id="children-list"></ul>
             <form class="stack" id="child-form">
+              <h3 class="panel__sub" id="child-form-title">Новая карточка</h3>
               <label class="field"><span>Как зовём ребёнка (имя или прозвище)</span><input type="text" name="nickname" required maxlength="40"></label>
               <label class="field"><span>Возраст</span>
                 <select name="age_group" required>
@@ -113,12 +114,74 @@
                 <label><input type="checkbox" name="topics" value="не знаю"> Пока не знаю</label>
               </fieldset>
               <label class="field"><span>Город (по желанию)</span><input type="text" name="city" maxlength="60"></label>
+              <label class="field"><span>Диагнозы (по желанию, через запятую)</span><input type="text" name="diagnoses" maxlength="600"></label>
+              <label class="field"><span>Кто занимается с ребёнком (каждый с новой строки: Имя — специальность)</span><textarea name="specialists" rows="3" maxlength="1300" placeholder="Айгуль — логопед"></textarea></label>
+              <label class="field"><span>Лекарства (по желанию)</span><input type="text" name="medications" maxlength="300"></label>
+              <label class="field"><span>Аллергии (по желанию)</span><input type="text" name="allergies" maxlength="300"></label>
               <label class="consent__label">
                 <input type="checkbox" name="guardian" required>
                 <span>Я законный представитель ребёнка и согласен(на) на обработку этих данных</span>
               </label>
-              <button class="btn" type="submit">Добавить</button>
+              <div class="items__actions">
+                <button class="btn" type="submit" id="child-submit">Добавить</button>
+                <button class="btn btn--ghost" type="button" id="child-cancel" hidden>Отменить</button>
+              </div>
             </form>
+          </section>
+
+          <section class="panel" data-role="parent" aria-labelledby="p-diary" hidden>
+            <h2 class="panel__title" id="p-diary">📝 Дневник наблюдений</h2>
+            <p class="panel__note" id="diary-month"></p>
+            <form class="stack" id="diary-form">
+              <label class="field"><span>Ребёнок</span><select name="child" data-child-select required></select></label>
+              <label class="field"><span>Дата</span><input type="date" name="date" required></label>
+              <fieldset class="checks">
+                <legend class="field-legend">Как прошёл день?</legend>
+                <label><input type="radio" name="mood" value="good" required> 😊 Хороший</label>
+                <label><input type="radio" name="mood" value="normal"> 😐 Обычный</label>
+                <label><input type="radio" name="mood" value="bad"> 😢 Трудный</label>
+              </fieldset>
+              <fieldset class="checks">
+                <legend class="field-legend">Что ещё отметить?</legend>
+                <label><input type="checkbox" name="tags" value="new_word"> 🗣 Новое слово</label>
+                <label><input type="checkbox" name="tags" value="tantrum"> 😤 Истерика</label>
+                <label><input type="checkbox" name="tags" value="bad_sleep"> 😴 Плохо спал</label>
+                <label><input type="checkbox" name="tags" value="bad_eat"> 🍽 Плохо ел</label>
+                <label><input type="checkbox" name="tags" value="medicine"> 💊 Лекарство</label>
+                <label><input type="checkbox" name="tags" value="homework"> 📝 Д/з сделано</label>
+              </fieldset>
+              <label class="field"><span>Заметка (по желанию)</span><textarea name="note" rows="3" maxlength="500"></textarea></label>
+              <button class="btn" type="submit">Записать</button>
+            </form>
+          </section>
+
+          <section class="panel" data-role="parent" aria-labelledby="p-report" hidden>
+            <h2 class="panel__title" id="p-report">📊 Отчёт для специалиста</h2>
+            <p class="panel__note">Соберём записи дневника за период. Текст можно скопировать и отправить специалисту.</p>
+            <form class="stack" id="report-form">
+              <label class="field"><span>Ребёнок</span><select name="child" data-child-select required></select></label>
+              <label class="field"><span>Период</span>
+                <select name="days">
+                  <option value="14">2 недели</option>
+                  <option value="30" selected>Месяц</option>
+                  <option value="90">3 месяца</option>
+                </select>
+              </label>
+              <button class="btn" type="submit">Собрать отчёт</button>
+            </form>
+            <div id="report-box" hidden>
+              <pre class="report" id="report-out" data-no-i18n></pre>
+              <div class="items__actions">
+                <button class="btn btn--small" type="button" id="report-copy">Скопировать</button>
+                <button class="btn btn--ghost btn--small" type="button" id="report-print">Распечатать</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" data-role="parent" aria-labelledby="p-route" hidden>
+            <h2 class="panel__title" id="p-route">🗺 Не знаю, с чего начать</h2>
+            <p class="panel__note">4 вопроса — и короткий маршрут: к кому идти сначала и что взять с собой.</p>
+            <a class="btn btn--ghost btn--small" href="route.html">Пройти</a>
           </section>
 
           <section class="panel" data-role="parent" aria-labelledby="p-leads" hidden>
