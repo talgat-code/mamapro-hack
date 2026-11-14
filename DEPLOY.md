@@ -39,9 +39,11 @@
 (`node index.js --env .env.dev` со своим `BOT_TOKEN`).
 
 ## Демо-специалисты
-Таблица `public.specialists` — 42 вымышленных профиля (`is_demo = true`), чтение открыто, запись только service_role.
-Набор генерирует `supabase/demo/gen_specialists.py` (детерминированно); после правок генератора — новая миграция:
-`python supabase/demo/gen_specialists.py > supabase/migrations/<дата>_<имя>.sql` (вместо create table — delete + insert).
+Таблица `public.specialists` — 536 вымышленных профилей (`is_demo = true`), чтение открыто, запись только service_role.
+Набор генерирует `supabase/demo/gen_specialists.py` (детерминированно): у каждой комбинации условий поиска есть хотя бы
+один специалист, принимающий обращения (кроме «Другой город» + «Очно»). Генератор сам проверяет покрытие и падает,
+если оно нарушено. После правок генератора — новая миграция данных (удаляет демо-строки и вставляет заново):
+`python supabase/demo/gen_specialists.py > supabase/migrations/<дата>_<имя>.sql`.
 Бот читает профили с кэшем на минуту; если таблица недоступна — встроенный запасной набор из `catalog.mjs`.
 
 ## Заявки

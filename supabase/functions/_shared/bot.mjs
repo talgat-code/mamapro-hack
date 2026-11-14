@@ -108,6 +108,23 @@ export function supabaseSpecialistSource(sb) {
   };
 }
 
+// Подходит ли профиль под анкету и условия поиска сессии (s.p, s.q). Экспорт — для проверки покрытия демо-данных.
+export function matchesProfile(pr, s) {
+  const p = s.p, q = s.q;
+  if (pr.dir !== q.dir) return false;
+  if (p.age !== null && p.age !== AGE_NONE && pr.ages.indexOf(p.age) === -1) return false;
+  const cl = CLASS_LANGS[q.clang];
+  if (!cl || (cl.id !== "any" && pr.langs.indexOf(cl.id) === -1)) return false;
+  const f = FORMATS[q.fmt];
+  const offlineOk = pr.formats.indexOf("off") !== -1 && !!(p.city && p.city.id === pr.city);
+  const onlineOk = pr.formats.indexOf("on") !== -1;
+  if (!f || (f.id === "off" && !offlineOk) || (f.id === "on" && !onlineOk) || (f.id === "any" && !offlineOk && !onlineOk)) return false;
+  if (q.budget === null) return false;
+  // Неизвестная цена (null) не проходит фильтр с ограничением бюджета — «не указано» не значит «дёшево».
+  if (q.budget >= 0 && (pr.price === null || pr.price > q.budget)) return false;
+  return true;
+}
+
 // ---------- Вспомогательное ----------
 const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const NBSP = " ";
@@ -203,22 +220,12 @@ export function createBot(deps) {
   const dateLabel = (iso) => { const d = String(iso || "").slice(0, 10).split("-"); return d.length === 3 ? d[2] + "." + d[1] + "." + d[0] : ""; };
 
   // ---------- Подбор ----------
-  function matches(pr, s) {
-    const p = s.p, q = s.q;
-    if (pr.dir !== q.dir) return false;
-    if (p.age !== null && p.age !== AGE_NONE && pr.ages.indexOf(p.age) === -1) return false;
-    const cl = CLASS_LANGS[q.clang];
-    if (!cl || (cl.id !== "any" && pr.langs.indexOf(cl.id) === -1)) return false;
-    const f = FORMATS[q.fmt];
-    const offlineOk = pr.formats.indexOf("off") !== -1 && !!(p.city && p.city.id === pr.city);
-    const onlineOk = pr.formats.indexOf("on") !== -1;
-    if (!f || (f.id === "off" && !offlineOk) || (f.id === "on" && !onlineOk) || (f.id === "any" && !offlineOk && !onlineOk)) return false;
-    if (q.budget === null) return false;
-    // Неизвестная цена (null) не проходит фильтр с ограничением бюджета — «не указано» не значит «дёшево».
-    if (q.budget >= 0 && (pr.price === null || pr.price > q.budget)) return false;
-    return true;
-  }
-  const results = (s) => specList.filter((pr) => matches(pr, s));
+  const matches = matchesProfile;
+  // Сначала те, кто принимает новые обращения; порядок внутри групп — как в БД.
+  const results = (s) => {
+    const list = specList.filter((pr) => matches(pr, s));
+    return list.filter(canRequest).concat(list.filter((pr) => !canRequest(pr)));
+  };
   // Первый незаполненный параметр поиска (экран), либо null.
   const missingCondition = (s) => (!dirOf(s.q.dir) ? "sections" : s.q.clang === null ? "clang"
     : s.q.fmt === null ? "fmt" : s.q.budget === null ? "budget" : null);
