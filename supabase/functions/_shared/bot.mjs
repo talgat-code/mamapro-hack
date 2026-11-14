@@ -11,6 +11,7 @@ import {
   CITIES, SUPPORT_CITIES, AGES, AGE_NONE, THEMES, SECTIONS, CLASS_LANGS, FORMATS, BUDGETS, BUDGET_MAX,
   CONTACT_TIMES, PROFILES, TEXT, CHOOSE_LANG
 } from "./catalog.mjs";
+import { WELCOME_JPEG_B64 } from "./welcome-image.mjs";
 
 export const SITE_URL = "https://mama-pro-hack.vercel.app";
 const SESSION_VERSION = 2;
@@ -100,7 +101,16 @@ function initialState() {
   };
 }
 
-// deps: { Bot, InlineKeyboard, session, token, botConfig?, supabase?, storage?, requests?, staffChatId?, logError, extend? }
+// Картинка приветствия: байты декодируются один раз; после первой отправки Telegram отдаёт file_id,
+// и дальше картинка не загружается заново (кэш на время жизни процесса).
+let welcomeBytes = null;
+let welcomeFileId = null;
+function welcomeImage() {
+  if (!welcomeBytes) welcomeBytes = Uint8Array.from(atob(WELCOME_JPEG_B64), (c) => c.charCodeAt(0));
+  return welcomeBytes;
+}
+
+// deps: { Bot, InlineKeyboard, InputFile?, session, token, botConfig?, supabase?, storage?, requests?, staffChatId?, logError, extend? }
 export function createBot(deps) {
   const InlineKeyboard = deps.InlineKeyboard;
   const supabase = deps.supabase || null;
@@ -185,7 +195,8 @@ export function createBot(deps) {
     const s = ctx.session;
     const extra = { reply_markup: kb, parse_mode: "HTML", link_preview_options: { is_disabled: true } };
     const tapped = ctx.callbackQuery && ctx.callbackQuery.message;
-    if (tapped) s.msgId = tapped.message_id;
+    // Сообщение с картинкой (приветствие) текстом не редактируем — экран уходит новым сообщением ниже.
+    if (tapped && !tapped.photo) s.msgId = tapped.message_id;
     if (s.msgId) {
       try {
         await ctx.api.editMessageText(chatId, s.msgId, text, extra);
@@ -239,13 +250,11 @@ export function createBot(deps) {
       kb: kb().text("Қазақша", "lang:kk").text("Русский", "lang:ru")
     }),
 
-    welcome: (s) => ({ text: t(s, "welcome"), kb: kb().text(t(s, "btnStartIntro"), "go:city") }),
-
     city: (s) => {
       const k = kb();
       CITIES.forEach((c, i) => k.text(lbl(s, c), "city:" + i).row());
-      k.text(t(s, "cityOther"), "city:other").row();
-      k.text(t(s, "btnBack"), backTo(s, "welcome"));
+      k.text(t(s, "cityOther"), "city:other");
+      if (s.ret) k.row().text(t(s, "btnBack"), "go:" + s.ret); // первый шаг анкеты: назад — только при редактировании
       return { text: t(s, "cityQ"), kb: k };
     },
 
@@ -731,6 +740,68 @@ export function createBot(deps) {
     return show(ctx, kind === "support" ? "supportAccepted" : "specAccepted");
   }
 
+  // ---------- Приветствие I-HELP × MamaPro ----------
+  // Отдельное сообщение при /start (картинка с подписью). Не шаг сценария: s.screen не меняет,
+  // поэтому повторный /start не сбивает точку продолжения. Состояние кнопки — по анкете:
+  //   new — анкета не начата → «Начать знакомство»; cont — не завершена → «Продолжить»; done → «Открыть меню».
+  function welcomeState(s) {
+    const p = s.p;
+    if (p.first && p.last && p.phone && topicOf(p.topic)) return "done";
+    if (!p.city && !p.first && !p.phone && p.age === null && !p.topic) return "new";
+    return "cont";
+  }
+
+  function welcomeView(s, lang) {
+    const v = { lang };
+    const k = kb();
+    if (!s.lang) k.text("Қазақша", "wl:kk").text("Русский", "wl:ru");
+    else {
+      const st = welcomeState(s);
+      k.text(t(v, st === "new" ? "btnStartIntro" : st === "cont" ? "btnContinue" : "btnOpenMenu"), "wl:go");
+    }
+    return { caption: t(v, "welcome"), kb: k };
+  }
+
+  async function sendWelcome(ctx) {
+    const s = ctx.session;
+    const code = ctx.from && ctx.from.language_code;
+    // До выбора языка — язык Telegram (ru/kk), иначе русский; это только язык показа, не язык сервиса.
+    const lang = s.lang || (code === "kk" || code === "ru" ? code : "ru");
+    const view = welcomeView(s, lang);
+    const extra = { caption: view.caption, parse_mode: "HTML", reply_markup: view.kb };
+    let sent = null;
+    if (deps.InputFile) {
+      try {
+        sent = await ctx.api.sendPhoto(ctx.chat.id, welcomeFileId || new deps.InputFile(welcomeImage(), "i-help.jpg"), extra);
+      } catch (err) {
+        if (!welcomeFileId) throw err;
+        welcomeFileId = null; // file_id устарел — загружаем картинку заново
+        sent = await ctx.api.sendPhoto(ctx.chat.id, new deps.InputFile(welcomeImage(), "i-help.jpg"), extra);
+      }
+      const sizes = sent.photo || [];
+      if (sizes.length) welcomeFileId = sizes[sizes.length - 1].file_id;
+    } else {
+      sent = await ctx.api.sendMessage(ctx.chat.id, view.caption, { parse_mode: "HTML", reply_markup: view.kb });
+    }
+    s.welcome = sent.message_id;
+    s.welcomeUsed = false;
+    s.msgId = null; // следующий экран — новым сообщением под приветствием
+  }
+
+  // Обновить то же приветствие (после выбора языка): подпись у картинки или текст, если картинки нет.
+  async function updateWelcome(ctx, keyboard) {
+    const s = ctx.session;
+    const msg = ctx.callbackQuery.message;
+    const view = welcomeView(s, L(s));
+    const extra = { parse_mode: "HTML", reply_markup: keyboard || view.kb };
+    try {
+      if (msg.photo) await ctx.api.editMessageCaption(ctx.chat.id, msg.message_id, Object.assign({ caption: view.caption }, extra));
+      else await ctx.api.editMessageText(ctx.chat.id, msg.message_id, view.caption, extra);
+    } catch (err) {
+      if (!isNotModified(err)) throw err;
+    }
+  }
+
   // ---------- Бот ----------
   const bot = new deps.Bot(deps.token, deps.botConfig);
 
@@ -822,9 +893,34 @@ export function createBot(deps) {
   // ----- Команды -----
   bot.command("start", (ctx) => {
     const s = ctx.session;
+    // /start-ссылка с параметром: сохраняем его, он переживает приветствие и выбор языка.
+    if (ctx.match) s.startParam = String(ctx.match).slice(0, 64);
+    return sendWelcome(ctx);
+  });
+
+  // Выбор языка под приветствием: обновляем то же сообщение, язык сохраняется как язык сервиса.
+  bot.callbackQuery(/^wl:(ru|kk)$/, (ctx) => {
+    ctx.session.lang = ctx.match[1];
+    return updateWelcome(ctx);
+  });
+
+  // «Начать знакомство» / «Продолжить» / «Открыть меню».
+  bot.callbackQuery("wl:go", async (ctx) => {
+    const s = ctx.session;
+    if (!s.lang) return updateWelcome(ctx);
+    const msgId = ctx.callbackQuery.message && ctx.callbackQuery.message.message_id;
+    // Повторное нажатие на то же приветствие не запускает вторую анкету.
+    if (s.welcomeUsed && s.welcome === msgId) return;
+    s.welcome = msgId;
+    s.welcomeUsed = true;
+    // Кнопку под приветствием убираем: дальше разговор идёт в сообщениях ниже.
+    await ctx.api.editMessageReplyMarkup(ctx.chat.id, msgId, { reply_markup: { inline_keyboard: [] } }).catch(() => {});
     s.msgId = null;
-    // После паузы открываем сохранённый шаг.
-    return show(ctx, s.lang ? s.screen || "menu" : "lang");
+    s.ret = null;
+    const st = welcomeState(s);
+    if (st === "new") return show(ctx, "city");
+    if (st === "done") return show(ctx, "menu");
+    return show(ctx, !s.screen || s.screen === "lang" || s.screen === "welcome" ? "city" : s.screen);
   });
 
   bot.command("menu", (ctx) => {
@@ -855,7 +951,7 @@ export function createBot(deps) {
       const msgId = s.msgId;
       ctx.session = initialState();
       ctx.session.msgId = msgId;
-      return show(ctx, "lang");
+      return sendWelcome(ctx); // как первый запуск: приветствие с выбором языка
     }
     return show(ctx, s.ui.prev || "menu");
   });
@@ -883,7 +979,7 @@ export function createBot(deps) {
     const s = ctx.session;
     const first = !s.p.first && !s.p.city;
     s.lang = ctx.match[1];
-    if (first) return show(ctx, "welcome");
+    if (first) { s.msgId = null; return show(ctx, "city"); }
     const prev = s.ui.prev;
     s.ui.prev = null;
     return show(ctx, prev && prev !== "lang" ? prev : "menu");
@@ -1138,9 +1234,10 @@ export function createBot(deps) {
   bot.on("message:text", async (ctx) => {
     const s = ctx.session;
     const text = ctx.message.text.trim();
-    if (text.charAt(0) === "/" || !s.lang) {
+    if (!s.lang) return sendWelcome(ctx); // ещё не начинали — приветствие с выбором языка
+    if (text.charAt(0) === "/") {
       s.msgId = null;
-      return show(ctx, s.lang ? "menu" : "lang");
+      return show(ctx, "menu");
     }
     const screen = s.screen;
 

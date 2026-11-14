@@ -11,7 +11,7 @@ const { pathToFileURL } = require("url");
 const ENV_ARG = process.argv.indexOf("--env");
 const ENV_FILE = ENV_ARG !== -1 && process.argv[ENV_ARG + 1] ? process.argv[ENV_ARG + 1] : ".env";
 require("dotenv").config({ path: path.join(__dirname, "..", ENV_FILE) });
-const { Bot, InlineKeyboard, session, API_CONSTANTS } = require("grammy");
+const { Bot, InlineKeyboard, InputFile, session, API_CONSTANTS } = require("grammy");
 const { createClient } = require("@supabase/supabase-js");
 
 const { BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY, BOT_API_BASE, BOT_TEST_ENV, STAFF_CHAT_ID } = process.env;
@@ -51,6 +51,7 @@ async function main() {
   const bot = shared.createBot({
     Bot: Bot,
     InlineKeyboard: InlineKeyboard,
+    InputFile: InputFile,
     session: session,
     token: BOT_TOKEN,
     botConfig: Object.keys(clientConfig).length ? { client: clientConfig } : undefined,

@@ -3,7 +3,7 @@
 // Секреты функции: BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET; необязательный STAFF_CHAT_ID — служебный чат сотрудников
 // (туда приходят обращения с кнопками ответа). SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY Supabase задаёт сам.
 // Деплой и установка webhook — DEPLOY.md («Telegram-бот»).
-import { Bot, InlineKeyboard, session, webhookCallback } from "npm:grammy@1.46.0";
+import { Bot, InlineKeyboard, InputFile, session, webhookCallback } from "npm:grammy@1.46.0";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { createBot, supabaseRequestStore, supabaseSessionStorage } from "../_shared/bot.mjs";
 
@@ -31,7 +31,7 @@ if (missing.length === 0) {
   // service_role: обращения (bot_requests, копия в leads) и состояние диалога (bot_sessions) — в обход RLS, только с сервера.
   const supabase = createClient(sbUrl, sbKey, { auth: { persistSession: false } });
   const bot = createBot({
-    Bot, InlineKeyboard, session, token, supabase, logError,
+    Bot, InlineKeyboard, InputFile, session, token, supabase, logError,
     storage: supabaseSessionStorage(supabase),
     requests: supabaseRequestStore(supabase),
     staffChatId,

@@ -42,7 +42,7 @@ bot.api.config.use(async function (prev, method, payload) {
     throw e;
   }
   var result = true;
-  if (method === "sendWidget" || method === "sendMessage") result = { message_id: nextId++, chat: { id: payload.chat_id }, date: 0 };
+  if (method === "sendWidget" || method === "sendMessage" || method === "sendPhoto") result = { message_id: nextId++, chat: { id: payload.chat_id }, date: 0 };
   return { ok: true, result: result };
 });
 }
@@ -81,8 +81,8 @@ async function check(name, fn) {
     });
     await check("без флага /widget — неизвестная команда", async function () {
       var cs = await run(msg("/widget"));
-      assert.deepStrictEqual(cs.map(function (c) { return c.method; }), ["sendMessage"]);
-      assert(/Қай тіл|Чем помочь дальше/.test(cs[0].payload.text)); // неизвестная команда → выбор языка или меню
+      assert.deepStrictEqual(cs.map(function (c) { return c.method; }), ["sendPhoto"]);
+      assert(/I-HELP/.test(cs[0].payload.caption)); // язык не выбран → приветствие с выбором языка
     });
     await check("без флага widget_query игнорируется", async function () {
       var cs = await run(wq("a:1|1,,,"));
@@ -109,8 +109,8 @@ async function check(name, fn) {
 
     await check("/start по-прежнему работает", async function () {
       var cs = await run(msg("/start"));
-      assert.strictEqual(cs[0].method, "sendMessage");
-      assert(/Қай тіл/.test(cs[0].payload.text)); // сценарий mama.md начинается с выбора языка
+      assert.strictEqual(cs[0].method, "sendPhoto");
+      assert(/I-HELP/.test(cs[0].payload.caption)); // приветствие I-HELP × MamaPro с выбором языка
     });
 
     var flow = [
