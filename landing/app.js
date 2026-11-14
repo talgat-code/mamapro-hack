@@ -15,6 +15,22 @@
     box.hidden = !box.querySelector("a[data-config-url]:not([hidden])");
   });
 
+  /* ---------- Мягкое появление секций при прокрутке ---------- */
+  if (!reduceMotion && "IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) {
+          en.target.classList.add("is-visible");
+          io.unobserve(en.target);
+        }
+      });
+    }, { threshold: 0.08 });
+    each(document.querySelectorAll(".reveal"), function (el) {
+      el.classList.add("reveal--armed");
+      io.observe(el);
+    });
+  }
+
   /* ---------- Форма заявки ---------- */
   var form = document.getElementById("lead-form");
   var status = document.getElementById("lead-status");
