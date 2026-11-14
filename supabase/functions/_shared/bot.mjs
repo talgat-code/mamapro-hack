@@ -9,7 +9,7 @@
 // из служебного чата STAFF_CHAT_ID кнопками под карточкой обращения.
 import {
   CITIES, SUPPORT_CITIES, AGES, AGE_NONE, THEMES, SECTIONS, CLASS_LANGS, FORMATS, BUDGETS, BUDGET_MAX,
-  CONTACT_TIMES, PROFILES, TEXT, CHOOSE_LANG
+  CONTACT_TIMES, PROFILES, TEXT, CHOOSE_LANG, MONTHS, WEEKDAYS, CONTACT_SLOTS, MEETING_SLOTS, CALENDAR_DAYS_AHEAD
 } from "./catalog.mjs";
 import { WELCOME_JPEG_B64 } from "./welcome-image.mjs";
 
@@ -125,6 +125,71 @@ export function matchesProfile(pr, s) {
   return true;
 }
 
+// ---------- Даты и календарь ----------
+// Всё время — Алматы: единое время Казахстана UTC+5. Дата хранится как "YYYY-MM-DD", в кнопках — "YYYYMMDD".
+const KZ_OFFSET_MS = 5 * 3600 * 1000;
+const DAY_MS = 24 * 3600 * 1000;
+function kzToday() {
+  const d = new Date(Date.now() + KZ_OFFSET_MS);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+const isoDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+const compactDate = (ms) => isoDate(ms).replace(/-/g, "");
+const monthKey = (ms) => compactDate(ms).slice(0, 6);
+function parseDate(str) {
+  const m = /^(\d{4})-?(\d{2})-?(\d{2})$/.exec(String(str || ""));
+  if (!m) return NaN;
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+  return isoDate(ms) === m[1] + "-" + m[2] + "-" + m[3] ? ms : NaN;
+}
+// Выбирать можно с завтрашнего дня на CALENDAR_DAYS_AHEAD дней вперёд.
+function calendarRange() {
+  const today = kzToday();
+  return { min: today + DAY_MS, max: today + CALENDAR_DAYS_AHEAD * DAY_MS };
+}
+const inCalendar = (ms) => { const r = calendarRange(); return ms >= r.min && ms <= r.max; };
+function shiftMonth(key, delta) {
+  const d = new Date(Date.UTC(+key.slice(0, 4), +key.slice(4, 6) - 1 + delta, 1));
+  return monthKey(d.getTime());
+}
+// Месяц в допустимом диапазоне (иначе — первый допустимый).
+function clampMonth(key) {
+  const r = calendarRange();
+  const lo = monthKey(r.min), hi = monthKey(r.max);
+  return /^\d{6}$/.test(String(key || "")) && key >= lo && key <= hi ? key : lo;
+}
+// "16 ноября (пн)" / "16 қараша (дс)".
+function dayLabel(lang, ms) {
+  const d = new Date(ms);
+  const wd = WEEKDAYS[lang][(d.getUTCDay() + 6) % 7].toLowerCase();
+  return d.getUTCDate() + " " + MONTHS[lang].gen[d.getUTCMonth()] + " (" + wd + ")";
+}
+
+// Сетка месяца в inline-клавиатуре: стрелки месяцев, дни недели, числа. dayCb(YYYYMMDD) / navCb(YYYYMM) — callback_data.
+export function addCalendar(k, lang, key, dayCb, navCb) {
+  const r = calendarRange();
+  const ym = clampMonth(key);
+  const y = +ym.slice(0, 4), m = +ym.slice(4, 6) - 1;
+  const lo = monthKey(r.min), hi = monthKey(r.max);
+  const prev = shiftMonth(ym, -1), next = shiftMonth(ym, 1);
+  k.text(ym > lo ? "‹" : " ", ym > lo ? navCb(prev) : "noop")
+    .text(MONTHS[lang].nom[m] + " " + y, "noop")
+    .text(ym < hi ? "›" : " ", ym < hi ? navCb(next) : "noop").row();
+  WEEKDAYS[lang].forEach((w) => k.text(w, "noop"));
+  k.row();
+  const cells = [];
+  const pad = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7;
+  for (let i = 0; i < pad; i++) cells.push([" ", "noop"]);
+  const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  for (let d = 1; d <= days; d++) {
+    const ms = Date.UTC(y, m, d);
+    cells.push(ms >= r.min && ms <= r.max ? [String(d), dayCb(compactDate(ms))] : ["·", "noop"]);
+  }
+  while (cells.length % 7) cells.push([" ", "noop"]);
+  cells.forEach((c, i) => { k.text(c[0], c[1]); if (i % 7 === 6) k.row(); });
+  return k;
+}
+
 // ---------- Вспомогательное ----------
 const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const NBSP = " ";
@@ -217,6 +282,23 @@ export function createBot(deps) {
     : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "года" : "лет");
   const expLabel = (s, n) => t(s, "lExp", { n: L(s) === "kk" ? n : yearsRu(n) });
   const statusLabel = (s, st) => t(s, "st_" + st);
+  // Удобное время для связи: { date: "YYYY-MM-DD", time: "11:00" | null } (null — любое время этого дня).
+  // Старые сессии хранили индекс CONTACT_TIMES — показываем его прежней подписью.
+  const whenLabel = (s, date, time) => {
+    const ms = parseDate(date);
+    if (isNaN(ms)) return t(s, "notSet");
+    const day = dayLabel(L(s), ms);
+    return time ? TEXT[L(s)].whenAt.replace("{date}", day).replace("{time}", time) : TEXT[L(s)].whenAny.replace("{date}", day);
+  };
+  const timeLabel = (s, v) => (v && typeof v === "object" ? whenLabel(s, v.date, v.time)
+    : typeof v === "number" && CONTACT_TIMES[v] ? lbl(s, CONTACT_TIMES[v]) : t(s, "notSet"));
+  const timeValid = (v) => !!(v && typeof v === "object" && inCalendar(parseDate(v.date)) &&
+    (v.time === null || CONTACT_SLOTS.indexOf(v.time) !== -1));
+  // Предложение сотрудника: из календаря — "YYYY-MM-DD HH:MM" (показываем на языке родителя), иначе — как написал сотрудник.
+  const proposalLabel = (s, v) => {
+    const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$/.exec(String(v || ""));
+    return m ? whenLabel(s, m[1], m[2]) : String(v || "");
+  };
   const dateLabel = (iso) => { const d = String(iso || "").slice(0, 10).split("-"); return d.length === 3 ? d[2] + "." + d[1] + "." + d[0] : ""; };
 
   // ---------- Подбор ----------
@@ -273,6 +355,13 @@ export function createBot(deps) {
 
   const kb = () => new InlineKeyboard();
   const backTo = (s, def) => "go:" + (s.ret || def);
+  // Кнопки по три в ряд.
+  function pairs3(k, items) {
+    items.forEach((it, i) => { k.text(it[0], it[1]); if (i % 3 === 2) k.row(); });
+    if (items.length % 3) k.row();
+    return k;
+  }
+
   // Кнопки по две в ряд.
   function pairs(k, items) {
     items.forEach((it, i) => { k.text(it[0], it[1]); if (i % 2 === 1) k.row(); });
@@ -382,11 +471,22 @@ export function createBot(deps) {
       };
     },
 
+    // Удобный день для связи — календарь.
     time: (s) => {
-      const k = kb();
-      CONTACT_TIMES.forEach((c, i) => k.text(lbl(s, c), "time:" + i).row());
+      s.ui.calMonth = clampMonth(s.ui.calMonth);
+      const k = addCalendar(kb(), L(s), s.ui.calMonth, (d) => "cal:d:" + d, (m) => "cal:m:" + m);
       k.text(t(s, "btnBack"), backTo(s, "supportIntro"));
       return { text: t(s, "timeQ"), kb: k };
+    },
+
+    // Время в выбранный день.
+    timeSlot: (s) => {
+      const ms = parseDate(s.ui.calDate);
+      if (!inCalendar(ms)) return { redirect: "time" };
+      const k = pairs3(kb(), CONTACT_SLOTS.map((h) => [h, "slot:" + h.replace(":", "")]));
+      k.text(t(s, "btnAnyTime"), "slot:any").row();
+      k.text(t(s, "btnOtherDay"), "cal:m:" + monthKey(ms));
+      return { text: t(s, "slotQ", { date: dayLabel(L(s), ms) }), kb: k };
     },
 
     reviewSupport: (s) => {
@@ -592,8 +692,8 @@ export function createBot(deps) {
       if (!r) return { redirect: "reqs" };
       const lines = ["<b>" + esc(reqLabel(s, r)) + "</b>", t(s, "reqRecipient"),
         t(s, "reqStatus", { status: statusLabel(s, r.status) }), t(s, "reqSent", { date: dateLabel(r.created_at) })];
-      if (r.status === "proposed" && r.proposal) lines.push("", t(s, "reqProposal", { when: r.proposal }));
-      if (r.status === "confirmed" && r.proposal) lines.push("", t(s, "reqMeeting", { when: r.proposal }));
+      if (r.status === "proposed" && r.proposal) lines.push("", t(s, "reqProposal", { when: proposalLabel(s, r.proposal) }));
+      if (r.status === "confirmed" && r.proposal) lines.push("", t(s, "reqMeeting", { when: proposalLabel(s, r.proposal) }));
       if (r.status === "answered") lines.push("", r.answer ? t(s, "answerOther", { text: r.answer }) : t(s, "specReady"));
       if (s.ui.info) {
         lines.push("", "<i>" + t(s, "infoNote") + "</i>");
@@ -665,7 +765,7 @@ export function createBot(deps) {
       [t(v, "lPhone"), p.phone || t(v, "notSet")]];
     if (p.age !== null && p.age !== AGE_NONE) out.push([t(v, "lAge"), ageLabel(v, p.age)]);
     out.push([t(v, "lTopic"), topicLabel(v, p.topic)], [t(v, "lConsultLang"), t(v, L(s) === "kk" ? "langKk" : "langRu")],
-      [t(v, "lTime"), p.time !== null && CONTACT_TIMES[p.time] ? lbl(v, CONTACT_TIMES[p.time]) : t(v, "notSet")]);
+      [t(v, "lTime"), timeLabel(v, p.time)]);
     return out;
   }
 
@@ -711,6 +811,9 @@ export function createBot(deps) {
     const title = r.kind === "support" ? "Психологическая поддержка" : "Обращение к специалисту";
     const lines = ["<b>" + title + "</b> · " + statusLabel(ru, r.status), "#" + r.id.slice(0, 8)];
     (r.snapshot.staff || []).forEach(([k, v]) => lines.push(esc(k) + ": " + esc(v)));
+    if (r.proposal && (r.status === "proposed" || r.status === "confirmed")) {
+      lines.push((r.status === "confirmed" ? "Встреча: " : "Предложено: ") + esc(proposalLabel(ru, r.proposal)));
+    }
     if (from) lines.push("Telegram: " + (from.username ? "@" + esc(from.username) : "без username") + ", id " + from.id);
     return lines.join("\n");
   }
@@ -731,7 +834,7 @@ export function createBot(deps) {
     let text;
     const k = kb();
     if (kind === "proposed") {
-      text = t(s, "proposal", { when: r.proposal });
+      text = t(s, "proposal", { when: proposalLabel(s, r.proposal) });
       k.text(t(s, "btnFits"), "rqok:" + r.id).text(t(s, "btnOtherTime"), "rqno:" + r.id).row();
     } else {
       text = r.answer ? t(s, "answerOther", { text: r.answer }) : t(s, "specReady");
@@ -778,7 +881,8 @@ export function createBot(deps) {
     }
     let pr = null;
     if (kind === "support") {
-      if (s.p.time === null || !CONTACT_TIMES[s.p.time]) { s.ret = review; return show(ctx, "time"); }
+      // Время не выбрано, из старого формата или день уже прошёл — выбрать заново и вернуться к проверке.
+      if (!timeValid(s.p.time)) { s.ret = review; return show(ctx, "time"); }
       if (!(s.p.city && s.p.city.id && SUPPORT_CITIES.indexOf(s.p.city.id) !== -1)) return show(ctx, "supportIntro");
     } else {
       pr = profile(s.ui.spec);
@@ -905,29 +1009,81 @@ export function createBot(deps) {
     }
   });
 
+  // Неактивные клетки календаря (подписи, прошедшие дни): только закрываем «часики».
+  bot.callbackQuery("noop", () => {});
+
   // id чата — чтобы настроить служебный чат сотрудников (STAFF_CHAT_ID).
   bot.command("chatid", (ctx) => ctx.reply("chat id: " + ctx.chat.id));
 
   // ----- Служебный чат сотрудников -----
-  bot.callbackQuery(/^st:(time|ready|ans):([\w-]+)$/, async (ctx) => {
+  // Календарь сотрудника: дата → время встречи. Текстом — запасной вариант («Написать текстом»).
+  function staffCalendar(r, key) {
+    const k = addCalendar(kb(), "ru", key, (d) => "sd:" + r.id + ":" + d, (m) => "sn:" + r.id + ":" + m);
+    k.text("Написать текстом", "st:text:" + r.id);
+    return k;
+  }
+
+  async function staffRequest(ctx, id) {
+    if (!isStaffChat(ctx)) return null;
+    const r = await requests.get(id);
+    if (!r) { ctx.toast = "Обращение не найдено"; return null; }
+    if (r.status === "cancelled") { ctx.toast = "Обращение отменено родителем"; return null; }
+    return r;
+  }
+
+  bot.callbackQuery(/^sn:([\w-]+):(\d{6})$/, async (ctx) => {
+    const r = await staffRequest(ctx, ctx.match[1]);
+    if (!r) return;
+    await ctx.editMessageText("Обращение #" + r.id.slice(0, 8) + ": выберите дату встречи (время Алматы).",
+      { reply_markup: staffCalendar(r, ctx.match[2]) }).catch(() => {});
+  });
+
+  bot.callbackQuery(/^sd:([\w-]+):(\d{8})$/, async (ctx) => {
+    const r = await staffRequest(ctx, ctx.match[1]);
+    if (!r) return;
+    const ms = parseDate(ctx.match[2]);
+    if (!inCalendar(ms)) { ctx.toast = "Эту дату выбрать нельзя"; return; }
+    const k = pairs3(kb(), MEETING_SLOTS.map((h) => [h, "ss:" + r.id + ":" + ctx.match[2] + ":" + h.replace(":", "")]));
+    k.text("← Другой день", "sn:" + r.id + ":" + monthKey(ms));
+    await ctx.editMessageText("Обращение #" + r.id.slice(0, 8) + ": " + dayLabel("ru", ms) + ". Выберите время встречи (время Алматы).",
+      { reply_markup: k }).catch(() => {});
+  });
+
+  bot.callbackQuery(/^ss:([\w-]+):(\d{8}):(\d{4})$/, async (ctx) => {
+    const r = await staffRequest(ctx, ctx.match[1]);
+    if (!r) return;
+    const ms = parseDate(ctx.match[2]);
+    const time = ctx.match[3].slice(0, 2) + ":" + ctx.match[3].slice(2);
+    if (!inCalendar(ms) || MEETING_SLOTS.indexOf(time) === -1) { ctx.toast = "Это время выбрать нельзя"; return; }
+    const u = await requests.update(r.id, { status: "proposed", proposal: isoDate(ms) + " " + time });
+    await pushUser(ctx, u, "proposed");
+    await ctx.editMessageText("✅ Отправлено родителю.\n" + staffCard(u), { parse_mode: "HTML", reply_markup: staffKeyboard(u) }).catch(() => {});
+  });
+
+  bot.callbackQuery(/^st:(time|text|ready|ans):([\w-]+)$/, async (ctx) => {
     if (!isStaffChat(ctx)) return;
     const action = ctx.match[1];
     const r = await requests.get(ctx.match[2]);
     if (!r) { ctx.toast = "Обращение не найдено"; return; }
     if (r.status === "cancelled") { ctx.toast = "Обращение отменено родителем"; return; }
+    if (action === "time") {
+      await ctx.reply("Обращение #" + r.id.slice(0, 8) + ": выберите дату встречи (время Алматы).",
+        { reply_markup: staffCalendar(r, null) });
+      return;
+    }
     if (action === "ready") {
       const u = await requests.update(r.id, { status: "answered", answer: null });
       await pushUser(ctx, u, "answered");
       await ctx.editMessageText(staffCard(u) + "\n\n✅ Родителю отправлено: специалист готов обсудить встречу.", { parse_mode: "HTML" }).catch(() => {});
       return;
     }
-    const prompt = action === "time"
+    const prompt = action === "text"
       ? "Обращение #" + r.id.slice(0, 8) + ": напишите ответом на это сообщение дату и время встречи с часовым поясом."
       : "Обращение #" + r.id.slice(0, 8) + ": напишите ответом на это сообщение ответ специалиста для родителя.";
     const sent = await ctx.reply(prompt, {
-      reply_markup: { force_reply: true, input_field_placeholder: action === "time" ? "16 ноября, 11:00 (время Алматы)" : "Ответ специалиста" }
+      reply_markup: { force_reply: true, input_field_placeholder: action === "text" ? "16 ноября, 11:00 (время Алматы)" : "Ответ специалиста" }
     });
-    ctx.session.staff = { msg: sent.message_id, action, id: r.id };
+    ctx.session.staff = { msg: sent.message_id, action: action === "text" ? "time" : action, id: r.id };
   });
 
   bot.on("message:text", async (ctx, next) => {
@@ -1101,10 +1257,28 @@ export function createBot(deps) {
     return advance(ctx, "next");
   });
 
-  bot.callbackQuery(/^time:(\d+)$/, (ctx) => {
-    const i = Number(ctx.match[1]);
-    if (!CONTACT_TIMES[i]) return show(ctx, "time");
-    ctx.session.p.time = i;
+  // Календарь родителя: листание месяцев, выбор дня, выбор времени.
+  bot.callbackQuery(/^cal:m:(\d{6})$/, (ctx) => {
+    ctx.session.ui.calMonth = clampMonth(ctx.match[1]);
+    return show(ctx, "time");
+  });
+
+  bot.callbackQuery(/^cal:d:(\d{8})$/, (ctx) => {
+    const ms = parseDate(ctx.match[1]);
+    if (!inCalendar(ms)) return show(ctx, "time");
+    ctx.session.ui.calDate = isoDate(ms);
+    ctx.session.ui.calMonth = monthKey(ms);
+    return show(ctx, "timeSlot");
+  });
+
+  bot.callbackQuery(/^slot:(\d{4}|any)$/, (ctx) => {
+    const s = ctx.session;
+    const ms = parseDate(s.ui.calDate);
+    if (!inCalendar(ms)) return show(ctx, "time");
+    const v = ctx.match[1];
+    const time = v === "any" ? null : v.slice(0, 2) + ":" + v.slice(2);
+    if (time && CONTACT_SLOTS.indexOf(time) === -1) return show(ctx, "timeSlot");
+    s.p.time = { date: isoDate(ms), time };
     return advance(ctx, "reviewSupport");
   });
 
@@ -1273,7 +1447,7 @@ export function createBot(deps) {
     let u;
     if (ctx.match[1] === "ok") {
       u = await requests.update(r.id, { status: "confirmed" });
-      s.ui.flash = t(s, "confirmed", { when: r.proposal });
+      s.ui.flash = t(s, "confirmed", { when: proposalLabel(s, r.proposal) });
     } else {
       u = await requests.update(r.id, { status: "accepted", proposal: null });
       s.ui.flash = t(s, "otherTimeAck");
