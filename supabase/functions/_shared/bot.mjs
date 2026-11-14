@@ -195,13 +195,6 @@ const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 const NBSP = " ";
 export const money = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, NBSP) + NBSP + "₸";
 const NAME_RE = /^[\p{L}\p{M}][\p{L}\p{M}'’-]*$/u;
-// Телефон: 10–15 цифр с кодом страны; допускаются +, пробелы, скобки, дефисы. Возвращает нормализованный номер или null.
-function normalizePhone(raw) {
-  const v = String(raw || "").trim();
-  const digits = v.replace(/\D/g, "");
-  if (!/^\+?[\d\s()-]+$/.test(v) || digits.length < 10 || digits.length > 15) return null;
-  return (v.charAt(0) === "+" ? "+" : "") + digits;
-}
 
 function initialState() {
   return {
@@ -228,20 +221,13 @@ function welcomeImage() {
   return welcomeBytes;
 }
 
-// deps: { Bot, InlineKeyboard, InputFile?, session, token, loadSpecialists?, miniappUrl?, botConfig?, supabase?, storage?, requests?, staffChatId?, logError, extend? }
+// deps: { Bot, InlineKeyboard, InputFile?, session, token, loadSpecialists?, botConfig?, supabase?, storage?, requests?, staffChatId?, logError, extend? }
 export function createBot(deps) {
   const InlineKeyboard = deps.InlineKeyboard;
   const supabase = deps.supabase || null;
   const storage = deps.storage || memorySessionStorage();
   const requests = deps.requests || memoryRequestStore();
   const staffChatId = deps.staffChatId ? String(deps.staffChatId) : "";
-  // Мини-апп (сайт I-Help, раздел /app/): если адрес задан, приветствие и уведомления открывают его.
-  const miniappUrl = deps.miniappUrl ? String(deps.miniappUrl) : "";
-  function miniappLink(params) {
-    const u = new URL(miniappUrl);
-    Object.keys(params || {}).forEach((k) => u.searchParams.set(k, params[k]));
-    return u.toString();
-  }
   const logError = deps.logError || ((where, err) => console.error("[" + where + "] " + err));
 
   // Профили специалистов: из БД (deps.loadSpecialists) с кэшем на минуту; без БД или при ошибке — запасной набор.
@@ -816,7 +802,7 @@ export function createBot(deps) {
 
   async function notifyStaff(ctx, text, keyboard) {
     if (!staffChatId) return false;
-    await bot.api.sendMessage(staffChatId, text, { parse_mode: "HTML", reply_markup: keyboard });
+    await ctx.api.sendMessage(staffChatId, text, { parse_mode: "HTML", reply_markup: keyboard });
     return true;
   }
 
@@ -855,9 +841,8 @@ export function createBot(deps) {
       k.text(t(s, "btnSearchSpecs"), "search:cont").row().text(t(s, "btnCancelReq"), "rqc:" + r.id).row();
     }
     k.text(t(s, "btnMyReqs"), "go:reqs");
-    if (miniappUrl) k.row().webApp(t(s, "appOpenReq"), miniappLink({ req: r.id }));
     text = "<b>" + esc(reqLabel(s, r)) + "</b>\n" + text;
-    await bot.api.sendMessage(r.chat_id, text, { parse_mode: "HTML", reply_markup: k });
+    await ctx.api.sendMessage(r.chat_id, text, { parse_mode: "HTML", reply_markup: k });
   }
 
   // ---------- Отправка обращения ----------
@@ -874,9 +859,9 @@ export function createBot(deps) {
     };
   }
 
-  async function saveLeadCopy(from, s, r) {
+  async function saveLeadCopy(ctx, s, r) {
     if (!supabase) return;
-    from = from || {};
+    const from = ctx.from || {};
     const msg = ("Telegram-бот, " + (r.kind === "support" ? "психологическая поддержка" : "обращение к специалисту") + ": " +
       r.snapshot.staff.map(([k, v]) => k + ": " + v).join("; ") +
       "; обращение " + r.id + ", user_id " + from.id + ", username " + (from.username ? "@" + from.username : "не указан")).slice(0, 1000);
@@ -884,88 +869,48 @@ export function createBot(deps) {
     if (res.error) throw new Error("leads insert: " + res.error.message);
   }
 
-  // Ядро отправки — общее для чата и мини-аппа. kind: "support" | "spec"; specId — для обращения к специалисту.
-  // Результат: { missing: экран } | { needTime } | { noSupport } | { noProfile } | { mismatch } | { existing: id }
-  //   | { created: запись } | { failed }.
-  async function submitCore(s, chatId, from, kind, specId) {
+  async function submit(ctx, kind) {
+    const s = ctx.session;
+    const review = kind === "support" ? "reviewSupport" : "reviewSpec";
     // Обязательные поля проверяются заново — в том числе в восстановленной старой сессии.
     const miss = missingRequired(s);
-    if (miss) return { missing: miss };
+    if (miss) {
+      s.ret = review;
+      s.ui.err = t(s, "missingField");
+      return show(ctx, miss);
+    }
     let pr = null;
     if (kind === "support") {
-      // Время не выбрано, из старого формата или день уже прошёл — выбрать заново.
-      if (!timeValid(s.p.time)) return { needTime: true };
-      if (!(s.p.city && s.p.city.id && SUPPORT_CITIES.indexOf(s.p.city.id) !== -1)) return { noSupport: true };
+      // Время не выбрано, из старого формата или день уже прошёл — выбрать заново и вернуться к проверке.
+      if (!timeValid(s.p.time)) { s.ret = review; return show(ctx, "time"); }
+      if (!(s.p.city && s.p.city.id && SUPPORT_CITIES.indexOf(s.p.city.id) !== -1)) return show(ctx, "supportIntro");
     } else {
-      pr = profile(specId);
-      if (!pr) return { noProfile: true };
-      if (missingCondition(s) || !canRequest(pr) || !matches(pr, s)) return { mismatch: true };
+      pr = profile(s.ui.spec);
+      if (!pr) return show(ctx, "results");
+      if (missingCondition(s) || !canRequest(pr) || !matches(pr, s)) return show(ctx, "specMismatch");
     }
+
+    s.ui.retry = kind;
     let r;
     try {
       // Повторная отправка того же активного обращения открывает существующее, а не создаёт дубль.
-      const list = await requests.list(chatId);
+      const list = await requests.list(ctx.chat.id);
       const dup = list.find((x) => x.kind === (kind === "support" ? "support" : "specialist") && x.status !== "cancelled" &&
         (kind === "support" || x.snapshot.spec_id === pr.id));
-      if (dup) return { existing: dup.id };
+      if (dup) { s.ui.req = dup.id; s.ui.info = false; return show(ctx, "req"); }
       r = await requests.create({
-        chat_id: chatId, kind: kind === "support" ? "support" : "specialist", status: "accepted",
+        chat_id: ctx.chat.id, kind: kind === "support" ? "support" : "specialist", status: "accepted",
         snapshot: buildSnapshot(s, kind, pr)
       });
     } catch (err) {
       logError("submit", err);
-      return { failed: true };
+      return show(ctx, "sendFail");
     }
-    try { await saveLeadCopy(from, s, r); } catch (err) { logError("leads", err); }
-    try { await notifyStaff(null, "Новое обращение\n" + staffCard(r, from), staffKeyboard(r)); } catch (err) { logError("notifyStaff", err); }
-    return { created: r };
-  }
-
-  async function submit(ctx, kind) {
-    const s = ctx.session;
-    const review = kind === "support" ? "reviewSupport" : "reviewSpec";
-    s.ui.retry = kind;
-    const res = await submitCore(s, ctx.chat.id, ctx.from, kind, s.ui.spec);
-    if (res.missing) { s.ret = review; s.ui.err = t(s, "missingField"); return show(ctx, res.missing); }
-    if (res.needTime) { s.ret = review; return show(ctx, "time"); }
-    if (res.noSupport) return show(ctx, "supportIntro");
-    if (res.noProfile) return show(ctx, "results");
-    if (res.mismatch) return show(ctx, "specMismatch");
-    if (res.existing) { s.ui.req = res.existing; s.ui.info = false; return show(ctx, "req"); }
-    if (res.failed) return show(ctx, "sendFail");
-    s.ui.req = res.created.id;
+    s.ui.req = r.id;
     s.ui.retry = null;
+    try { await saveLeadCopy(ctx, s, r); } catch (err) { logError("leads", err); }
+    try { await notifyStaff(ctx, "Новое обращение\n" + staffCard(r, ctx.from), staffKeyboard(r)); } catch (err) { logError("notifyStaff", err); }
     return show(ctx, kind === "support" ? "supportAccepted" : "specAccepted");
-  }
-
-  // Отмена обращения родителем. Результат: { notFound } | { already } | { failed } | { cancelled: запись }.
-  async function cancelCore(chatId, id, from) {
-    const r = id ? await requests.get(id) : null;
-    if (!r || String(r.chat_id) !== String(chatId)) return { notFound: true };
-    if (r.status === "cancelled") return { already: true }; // повторная отмена ничего не меняет
-    const u = Object.assign({}, r, { status: "cancelled" });
-    // Отмена подтверждённой встречи завершается, только когда дошла до сотрудника.
-    try {
-      await notifyStaff(null, "Родитель отменил обращение\n" + staffCard(u, from), undefined);
-    } catch (err) {
-      logError("notifyStaff", err);
-      if (r.status === "confirmed") return { failed: true };
-    }
-    return { cancelled: await requests.update(r.id, { status: "cancelled" }) };
-  }
-
-  // Ответ родителя на предложенное время. Результат: { notFound } | { notProposed } | { updated: запись, proposal }.
-  async function respondCore(chatId, id, ok, from) {
-    const r = id ? await requests.get(id) : null;
-    if (!r || String(r.chat_id) !== String(chatId)) return { notFound: true };
-    if (r.status !== "proposed") return { notProposed: true };
-    const u = ok ? await requests.update(r.id, { status: "confirmed" })
-      : await requests.update(r.id, { status: "accepted", proposal: null });
-    try {
-      await notifyStaff(null, (ok ? "Родитель подтвердил время" : "Родителю нужно другое время") +
-        "\n" + staffCard(u, from), staffKeyboard(u));
-    } catch (err) { logError("notifyStaff", err); }
-    return { updated: u, proposal: r.proposal };
   }
 
   // ---------- Приветствие I-HELP × MamaPro ----------
@@ -985,10 +930,7 @@ export function createBot(deps) {
     if (!s.lang) k.text("Қазақша", "wl:kk").text("Русский", "wl:ru");
     else {
       const st = welcomeState(s);
-      const label = t(v, st === "new" ? "btnStartIntro" : st === "cont" ? "btnContinue" : "btnOpenMenu");
-      // Дальше всё — в мини-аппе; без адреса мини-аппа — прежний сценарий в чате.
-      if (miniappUrl) k.webApp(label, miniappLink({ lang: s.lang }));
-      else k.text(label, "wl:go");
+      k.text(t(v, st === "new" ? "btnStartIntro" : st === "cont" ? "btnContinue" : "btnOpenMenu"), "wl:go");
     }
     return { caption: t(v, "welcome"), kb: k };
   }
@@ -1479,10 +1421,19 @@ export function createBot(deps) {
     const s = ctx.session;
     s.ui.req = ctx.match[1];
     s.ui.info = false;
-    const res = await cancelCore(ctx.chat.id, s.ui.req, ctx.from);
-    if (res.notFound) return show(ctx, "reqs");
-    if (res.failed) s.ui.err = t(s, "cancelFail");
-    if (res.cancelled) s.ui.flash = t(s, "cancelled");
+    const r = await ownRequest(ctx, s.ui.req);
+    if (!r) return show(ctx, "reqs");
+    if (r.status === "cancelled") return show(ctx, "req"); // повторная отмена ничего не меняет
+    const u = Object.assign({}, r, { status: "cancelled" });
+    // Отмена подтверждённой встречи завершается, только когда дошла до сотрудника.
+    try {
+      await notifyStaff(ctx, "Родитель отменил обращение\n" + staffCard(u, ctx.from), undefined);
+    } catch (err) {
+      logError("notifyStaff", err);
+      if (r.status === "confirmed") { s.ui.err = t(s, "cancelFail"); return show(ctx, "req"); }
+    }
+    await requests.update(r.id, { status: "cancelled" });
+    s.ui.flash = t(s, "cancelled");
     return show(ctx, "req");
   });
 
@@ -1490,10 +1441,21 @@ export function createBot(deps) {
     const s = ctx.session;
     s.ui.req = ctx.match[2];
     s.ui.info = false;
-    const ok = ctx.match[1] === "ok";
-    const res = await respondCore(ctx.chat.id, s.ui.req, ok, ctx.from);
-    if (res.notFound) return show(ctx, "reqs");
-    if (res.updated) s.ui.flash = ok ? t(s, "confirmed", { when: proposalLabel(s, res.proposal) }) : t(s, "otherTimeAck");
+    const r = await ownRequest(ctx, s.ui.req);
+    if (!r) return show(ctx, "reqs");
+    if (r.status !== "proposed") return show(ctx, "req");
+    let u;
+    if (ctx.match[1] === "ok") {
+      u = await requests.update(r.id, { status: "confirmed" });
+      s.ui.flash = t(s, "confirmed", { when: proposalLabel(s, r.proposal) });
+    } else {
+      u = await requests.update(r.id, { status: "accepted", proposal: null });
+      s.ui.flash = t(s, "otherTimeAck");
+    }
+    try {
+      await notifyStaff(ctx, (ctx.match[1] === "ok" ? "Родитель подтвердил время" : "Родителю нужно другое время") +
+        "\n" + staffCard(u, ctx.from), staffKeyboard(u));
+    } catch (err) { logError("notifyStaff", err); }
     return show(ctx, "req");
   });
 
@@ -1501,12 +1463,12 @@ export function createBot(deps) {
   async function onPhone(ctx, raw) {
     const s = ctx.session;
     const v = String(raw).trim();
-    const norm = normalizePhone(v);
-    if (!norm) {
+    const digits = v.replace(/\D/g, "");
+    if (!/^\+?[\d\s()-]+$/.test(v) || digits.length < 10 || digits.length > 15) {
       s.ui.err = t(s, "phoneErr") + "\n" + t(s, "youEntered", { v: v.slice(0, 40) });
       return show(ctx, "phone");
     }
-    s.p.phone = norm;
+    s.p.phone = (v.charAt(0) === "+" ? "+" : "") + digits;
     return advance(ctx, "age");
   }
 
@@ -1586,153 +1548,6 @@ export function createBot(deps) {
       logError("bot.catch", e);
     }
   });
-
-  // ---------- API мини-аппа ----------
-  // Вызывается из Edge Function после проверки подписи Telegram (initData): user — проверенный пользователь.
-  // Состояние — та же сессия, что у чата (ключ — id чата = id пользователя в личке): анкета и поиск общие.
-  async function loadSession(userId) {
-    const v = await storage.read(String(userId));
-    return v && v.v === SESSION_VERSION ? v : initialState();
-  }
-  const saveSession = (userId, s) => storage.write(String(userId), s);
-  const fromOf = (user) => ({ id: user.id, username: user.username });
-
-  function stateView(s, user) {
-    const code = user && user.language_code;
-    return {
-      lang: s.lang, suggestedLang: code === "kk" || code === "ru" ? code : "ru",
-      p: s.p, q: s.q, notify: s.notify !== false, onboarding: welcomeState(s),
-      timeValid: timeValid(s.p.time)
-    };
-  }
-
-  function requestView(s, r) {
-    return {
-      id: r.id, kind: r.kind, status: r.status, statusLabel: statusLabel(s, r.status), label: reqLabel(s, r),
-      created: dateLabel(r.created_at), proposal: r.proposal ? proposalLabel(s, r.proposal) : null,
-      answer: r.status === "answered" ? (r.answer || t(s, "specReady")) : null,
-      lines: r.snapshot.lines || [], specId: r.snapshot.spec_id || null
-    };
-  }
-
-  function catalogView() {
-    const r = calendarRange();
-    return {
-      CITIES, SUPPORT_CITIES, AGES, AGE_NONE, THEMES, SECTIONS, CLASS_LANGS, FORMATS, BUDGETS, BUDGET_MAX,
-      CONTACT_SLOTS, TEXT, MONTHS, WEEKDAYS, calendar: { min: isoDate(r.min), max: isoDate(r.max) }
-    };
-  }
-
-  // Частичное сохранение анкеты/условий. Каждое поле проверяется как в чате; ошибки — по полям, на языке родителя.
-  function applyPatch(s, patch) {
-    const errors = {};
-    if (patch.lang === "ru" || patch.lang === "kk") s.lang = patch.lang;
-    if (typeof patch.notify === "boolean") s.notify = patch.notify;
-    const p = patch.p || {}, q = patch.q || {};
-    if ("city" in p) {
-      const c = p.city || {};
-      const name = typeof c.name === "string" ? c.name.trim() : "";
-      if (c.id && CITIES.some((x) => x.id === c.id)) s.p.city = { id: c.id };
-      else if (name.length >= 2 && name.length <= 60) s.p.city = { name };
-      else errors.city = t(s, "cityOtherErr");
-    }
-    if ("first" in p || "last" in p) {
-      const first = String(p.first || "").trim().replace(/\s+/g, " ");
-      const last = String(p.last || "").trim().replace(/\s+/g, " ");
-      const words = (first + " " + last).trim().split(" ");
-      if (!first) errors.first = t(s, "nameErrFirst");
-      else if (!last) errors.last = t(s, "nameErrLast");
-      else if (!words.every((w) => NAME_RE.test(w) && w.length <= 50) || (first + " " + last).length > 100) errors.first = t(s, "nameErrChars");
-      else { s.p.first = first; s.p.last = last; }
-    }
-    if ("phone" in p) {
-      const n = normalizePhone(p.phone);
-      if (n) s.p.phone = n; else errors.phone = t(s, "phoneErr");
-    }
-    if ("age" in p) { if (Number.isInteger(p.age) && AGES[p.age]) s.p.age = p.age; else errors.age = t(s, "pickButton"); }
-    if ("topic" in p) { if (topicOf(p.topic)) s.p.topic = p.topic; else errors.topic = t(s, "pickButton"); }
-    if ("time" in p) {
-      const v = p.time && { date: String(p.time.date || ""), time: p.time.time ? String(p.time.time) : null };
-      if (timeValid(v)) s.p.time = v; else errors.time = t(s, "appTimeErr");
-    }
-    if ("dir" in q) {
-      if (dirOf(q.dir)) { if (s.q.dir !== q.dir) { s.q.cmp = []; s.q.idx = 0; } s.q.dir = q.dir; } // сравнение — в пределах направления
-      else errors.dir = t(s, "pickButton");
-    }
-    if ("clang" in q) { if (Number.isInteger(q.clang) && CLASS_LANGS[q.clang]) s.q.clang = q.clang; else errors.clang = t(s, "pickButton"); }
-    if ("fmt" in q) { if (Number.isInteger(q.fmt) && FORMATS[q.fmt]) s.q.fmt = q.fmt; else errors.fmt = t(s, "pickButton"); }
-    if ("budget" in q) {
-      const b = q.budget;
-      if (Number.isInteger(b) && (b === -1 || (b >= 0 && b <= BUDGET_MAX))) s.q.budget = b; else errors.budget = t(s, "budgetErr");
-    }
-    if (Array.isArray(q.fav)) s.q.fav = q.fav.filter((id) => typeof id === "string" && profile(id)).slice(0, 50);
-    if (Array.isArray(q.cmp)) s.q.cmp = q.cmp.filter((id) => typeof id === "string" && profile(id)).slice(0, 2);
-    return errors;
-  }
-
-  bot.miniapp = {
-    async boot(user) {
-      await refreshSpecialists();
-      const s = await loadSession(user.id);
-      return { state: stateView(s, user), catalog: catalogView() };
-    },
-    async save(user, patch) {
-      await refreshSpecialists();
-      const s = await loadSession(user.id);
-      const errors = applyPatch(s, patch || {});
-      await saveSession(user.id, s);
-      return { errors, state: stateView(s, user) };
-    },
-    async search(user) {
-      await refreshSpecialists();
-      const s = await loadSession(user.id);
-      const miss = missingCondition(s);
-      if (miss) return { missing: miss, list: [] };
-      return { list: results(s), inDir: specList.some((pr) => pr.dir === s.q.dir) };
-    },
-    async profiles(user, ids) {
-      await refreshSpecialists();
-      return { list: (Array.isArray(ids) ? ids : []).slice(0, 60).map(profile).filter(Boolean) };
-    },
-    async submit(user, kind, specId) {
-      await refreshSpecialists();
-      const s = await loadSession(user.id);
-      const res = await submitCore(s, user.id, fromOf(user), kind === "spec" ? "spec" : "support", specId);
-      if (res.created) return { created: requestView(s, res.created) };
-      return res;
-    },
-    async requests(user) {
-      const s = await loadSession(user.id);
-      return { list: (await requests.list(user.id)).map((r) => requestView(s, r)) };
-    },
-    async request(user, id) {
-      const s = await loadSession(user.id);
-      const r = id ? await requests.get(id) : null;
-      return r && String(r.chat_id) === String(user.id) ? { request: requestView(s, r) } : { notFound: true };
-    },
-    async cancel(user, id) {
-      const s = await loadSession(user.id);
-      const res = await cancelCore(user.id, id, fromOf(user));
-      if (res.cancelled) return { request: requestView(s, res.cancelled), message: t(s, "cancelled") };
-      if (res.failed) return { error: t(s, "cancelFail") };
-      return res;
-    },
-    async respond(user, id, ok) {
-      const s = await loadSession(user.id);
-      const res = await respondCore(user.id, id, !!ok, fromOf(user));
-      if (!res.updated) return res;
-      return {
-        request: requestView(s, res.updated),
-        message: ok ? t(s, "confirmed", { when: proposalLabel(s, res.proposal) }) : t(s, "otherTimeAck")
-      };
-    },
-    // Публично (без подписи): карточка специалиста для страницы сайта — данные вымышленные.
-    async specialist(id) {
-      await refreshSpecialists();
-      const pr = profile(id);
-      return pr ? { profile: pr, catalog: catalogView() } : { notFound: true };
-    }
-  };
 
   return bot;
 }

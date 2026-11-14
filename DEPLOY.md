@@ -38,18 +38,6 @@
 локальный запуск откажется стартовать, чтобы не отключить прод: для разработки используйте отдельного бота
 (`node index.js --env .env.dev` со своим `BOT_TOKEN`).
 
-## Мини-апп I-Help (Telegram Mini App)
-Всё после приветствия в чате — в мини-аппе: `landing/app/` (статика на сайте, Vercel). Полная анкета специалиста —
-страница сайта `landing/specialist.html?id=…`. API — та же функция бота: `…/functions/v1/telegram-bot/api`
-(`supabase/functions/_shared/miniapp-http.mjs`): POST с `initData` (подпись Telegram проверяется токеном бота,
-данные старше суток отклоняются), GET `?action=specialist&id=` — публично, для страницы сайта.
-1. Выложить сайт: `npx vercel deploy --prod` (папка `landing/`).
-2. `npx supabase secrets set MINIAPP_URL=https://<сайт>/app/` — приветствие откроет мини-апп
-   (без секрета остаётся прежний сценарий в чате).
-3. Кнопка меню чата (один раз):
-   `curl -s "https://api.telegram.org/bot<токен>/setChatMenuButton" -H "content-type: application/json" -d '{"menu_button":{"type":"web_app","text":"I-Help","web_app":{"url":"https://<сайт>/app/"}}}'`.
-Адрес API для мини-аппа и страницы сайта — `landing/app/env.js`.
-
 ## Демо-специалисты
 Таблица `public.specialists` — 536 вымышленных профилей (`is_demo = true`), чтение открыто, запись только service_role.
 Набор генерирует `supabase/demo/gen_specialists.py` (детерминированно): у каждой комбинации условий поиска есть хотя бы
