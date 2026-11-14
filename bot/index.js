@@ -56,6 +56,8 @@ async function main() {
     token: BOT_TOKEN,
     botConfig: Object.keys(clientConfig).length ? { client: clientConfig } : undefined,
     supabase: supabase,
+    // Демо-профили специалистов из public.specialists (чтение открыто); без Supabase — встроенный запасной набор.
+    loadSpecialists: supabase ? shared.supabaseSpecialistSource(supabase) : null,
     staffChatId: STAFF_CHAT_ID,
     logError: logError,
     extend: WIDGETS_ENABLED ? function (b, d) { require("./widget").setupWidgets(b, d); } : null

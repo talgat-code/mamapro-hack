@@ -38,6 +38,12 @@
 локальный запуск откажется стартовать, чтобы не отключить прод: для разработки используйте отдельного бота
 (`node index.js --env .env.dev` со своим `BOT_TOKEN`).
 
+## Демо-специалисты
+Таблица `public.specialists` — 42 вымышленных профиля (`is_demo = true`), чтение открыто, запись только service_role.
+Набор генерирует `supabase/demo/gen_specialists.py` (детерминированно); после правок генератора — новая миграция:
+`python supabase/demo/gen_specialists.py > supabase/migrations/<дата>_<имя>.sql` (вместо create table — delete + insert).
+Бот читает профили с кэшем на минуту; если таблица недоступна — встроенный запасной набор из `catalog.mjs`.
+
 ## Заявки
 Таблица `public.leads`: аноним может только добавлять строки (RLS). Читать заявки —
 в дашборде Supabase (Table Editor) или через service_role на сервере.

@@ -79,6 +79,35 @@ export function memoryRequestStore() {
   };
 }
 
+// ---------- Специалисты ----------
+// Строка public.specialists → профиль бота: dir — "раздел:пункт" по specialty_code, ages — индексы AGES.
+export function profileFromRow(row) {
+  let dir = null;
+  SECTIONS.forEach((sec, si) => sec.dirs.forEach((d, di) => { if (d.code === row.specialty_code) dir = si + ":" + di; }));
+  if (!dir) return null;
+  const ages = (row.age_bands || []).map((c) => AGES.findIndex((a) => a.code === c)).filter((i) => i >= 0);
+  return {
+    id: row.id, name: row.display_name, dir, city: row.city || null,
+    formats: row.formats || [], langs: row.languages || [], ages,
+    price: row.price_kzt === null || row.price_kzt === undefined ? null : row.price_kzt,
+    minutes: row.duration_min || null,
+    availability: row.availability || "unknown",
+    exp: row.experience_years || null,
+    about: row.about && row.about.ru ? row.about : null,
+    quals: Array.isArray(row.qualifications) ? row.qualifications : []
+  };
+}
+
+// Загрузка демо-профилей из БД (чтение открыто: данные вымышленные).
+export function supabaseSpecialistSource(sb) {
+  return async () => {
+    const res = await sb.from("specialists").select("*").eq("is_demo", true);
+    if (res.error) throw new Error("specialists select: " + res.error.message);
+    return (res.data || []).map(profileFromRow).filter(Boolean)
+      .sort((a, b) => Number(a.id.replace(/\D/g, "")) - Number(b.id.replace(/\D/g, "")) || a.id.localeCompare(b.id));
+  };
+}
+
 // ---------- Вспомогательное ----------
 const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const NBSP = " ";
@@ -110,7 +139,7 @@ function welcomeImage() {
   return welcomeBytes;
 }
 
-// deps: { Bot, InlineKeyboard, InputFile?, session, token, botConfig?, supabase?, storage?, requests?, staffChatId?, logError, extend? }
+// deps: { Bot, InlineKeyboard, InputFile?, session, token, loadSpecialists?, botConfig?, supabase?, storage?, requests?, staffChatId?, logError, extend? }
 export function createBot(deps) {
   const InlineKeyboard = deps.InlineKeyboard;
   const supabase = deps.supabase || null;
@@ -118,6 +147,21 @@ export function createBot(deps) {
   const requests = deps.requests || memoryRequestStore();
   const staffChatId = deps.staffChatId ? String(deps.staffChatId) : "";
   const logError = deps.logError || ((where, err) => console.error("[" + where + "] " + err));
+
+  // Профили специалистов: из БД (deps.loadSpecialists) с кэшем на минуту; без БД или при ошибке — запасной набор.
+  const SPEC_TTL_MS = 60 * 1000;
+  let specList = PROFILES;
+  let specAt = 0;
+  async function refreshSpecialists() {
+    if (!deps.loadSpecialists || Date.now() - specAt < SPEC_TTL_MS) return;
+    specAt = Date.now();
+    try {
+      const list = await deps.loadSpecialists();
+      if (list.length) specList = list;
+    } catch (err) {
+      logError("specialists", err);
+    }
+  }
 
   // ---------- Тексты ----------
   const L = (s) => (s && s.lang === "kk" ? "kk" : "ru");
@@ -144,8 +188,17 @@ export function createBot(deps) {
   const budgetLabel = (s, b) => (b === null || b === undefined ? t(s, "notSet")
     : b < 0 ? t(s, "budgetNone") : b === 0 ? t(s, "budgetFree") : t(s, "budgetUpTo", { sum: money(b) }));
   const fullName = (p) => (p.first + " " + p.last).trim();
-  const priceLabel = (s, pr) => t(s, "priceFmt", { price: pr.price === 0 ? t(s, "free") : money(pr.price), min: pr.minutes });
-  const profile = (id) => PROFILES.find((x) => x.id === id) || null;
+  const priceLabel = (s, pr) => {
+    if (pr.price === null || pr.price === undefined) return t(s, "priceUnknown");
+    const price = pr.price === 0 ? t(s, "free") : money(pr.price);
+    return pr.minutes ? t(s, "priceFmt", { price, min: pr.minutes }) : esc(price);
+  };
+  const profile = (id) => specList.find((x) => x.id === id) || null;
+  const canRequest = (pr) => pr.availability === "available";
+  // Годы опыта: по-русски склоняем (1 год, 3 года, 5 лет), по-казахски «жыл» не меняется.
+  const yearsRu = (n) => n + " " + (n % 10 === 1 && n % 100 !== 11 ? "год"
+    : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "года" : "лет");
+  const expLabel = (s, n) => t(s, "lExp", { n: L(s) === "kk" ? n : yearsRu(n) });
   const statusLabel = (s, st) => t(s, "st_" + st);
   const dateLabel = (iso) => { const d = String(iso || "").slice(0, 10).split("-"); return d.length === 3 ? d[2] + "." + d[1] + "." + d[0] : ""; };
 
@@ -161,10 +214,11 @@ export function createBot(deps) {
     const onlineOk = pr.formats.indexOf("on") !== -1;
     if (!f || (f.id === "off" && !offlineOk) || (f.id === "on" && !onlineOk) || (f.id === "any" && !offlineOk && !onlineOk)) return false;
     if (q.budget === null) return false;
-    if (q.budget >= 0 && pr.price > q.budget) return false;
+    // Неизвестная цена (null) не проходит фильтр с ограничением бюджета — «не указано» не значит «дёшево».
+    if (q.budget >= 0 && (pr.price === null || pr.price > q.budget)) return false;
     return true;
   }
-  const results = (s) => PROFILES.filter((pr) => matches(pr, s));
+  const results = (s) => specList.filter((pr) => matches(pr, s));
   // Первый незаполненный параметр поиска (экран), либо null.
   const missingCondition = (s) => (!dirOf(s.q.dir) ? "sections" : s.q.clang === null ? "clang"
     : s.q.fmt === null ? "fmt" : s.q.budget === null ? "budget" : null);
@@ -176,12 +230,13 @@ export function createBot(deps) {
     const lg = pr.langs.map((x) => t(s, x === "kk" ? "langKk" : "langRu")).join(", ");
     return [
       "<b>" + esc(pr.name) + "</b> — " + esc(dirLabel(s, pr.dir)),
-      t(s, "lCity") + ": " + esc(cityLabel(s, { id: pr.city })),
+      // Город только у тех, у кого он есть (работающие только онлайн его не указывают).
+      ...(pr.city ? [t(s, "lCity") + ": " + esc(cityLabel(s, { id: pr.city }))] : []),
       t(s, "lFormat") + ": " + esc(fm),
       t(s, "lLangs") + ": " + esc(lg),
       t(s, "lAges") + ": " + esc(pr.ages.map((a) => lbl(s, AGES[a])).join(", ")),
       t(s, "lPrice") + ": " + priceLabel(s, pr),
-      t(s, pr.acceptsNew ? "newOk" : "newNo")
+      t(s, pr.availability === "available" ? "newOk" : pr.availability === "waitlist" ? "newNo" : "newUnknown")
     ];
   }
 
@@ -415,7 +470,7 @@ export function createBot(deps) {
       if (miss) return { redirect: miss === "sections" ? "sections" : "conditions" };
       const list = results(s);
       if (!list.length) {
-        const inDir = PROFILES.some((pr) => pr.dir === s.q.dir);
+        const inDir = specList.some((pr) => pr.dir === s.q.dir);
         const k = kb().text(t(s, "btnOtherDirs"), "go:sections").row()
           .text(t(s, "btnChangeCond"), "go:conditions").row();
         if (inDir && FORMATS[s.q.fmt].id !== "on") k.text(t(s, "btnSeeOnline"), "fmt:online").row();
@@ -441,10 +496,17 @@ export function createBot(deps) {
     profile: (s) => {
       const pr = profile(s.ui.spec);
       if (!pr) return { redirect: "results" };
-      const text = [t(s, "profileTitle"), ""].concat(cardLines(s, pr))
-        .concat(["", esc(lbl(s, pr.about)), "", "<i>" + t(s, "demoMark") + "</i>"]).join("\n");
+      const lines = [t(s, "profileTitle"), ""].concat(cardLines(s, pr));
+      if (pr.about) lines.push("", esc(lbl(s, pr.about)));
+      if (pr.exp) lines.push("", expLabel(s, pr.exp));
+      if (pr.quals && pr.quals.length) {
+        lines.push(t(s, "lQual") + ":");
+        pr.quals.forEach((qu) => lines.push("• " + esc(qu.title ? lbl(s, qu.title) || qu.title.ru : "")));
+      }
+      lines.push("", "<i>" + t(s, "demoMark") + "</i>");
+      const text = lines.join("\n");
       const k = kb();
-      if (pr.acceptsNew) k.text(t(s, "btnPrepare"), "prep:" + pr.id).row();
+      if (canRequest(pr)) k.text(t(s, "btnPrepare"), "prep:" + pr.id).row();
       k.text(t(s, s.q.fav.indexOf(pr.id) !== -1 ? "btnUnfav" : "btnFav"), "fav:" + pr.id)
         .text(t(s, s.q.cmp.indexOf(pr.id) !== -1 ? "btnUncmp" : "btnCmp"), "cmp:" + pr.id).row();
       if (s.q.cmp.length) k.text(t(s, "btnOpenCmp"), "go:compare").row();
@@ -461,7 +523,7 @@ export function createBot(deps) {
         lines.push(t(s, "lPrice") + ": " + priceLabel(s, pr));
         lines.push(t(s, "lFormat") + ": " + esc(pr.formats.map((f) => t(s, f === "off" ? "fmtOff" : "fmtOn")).join(", ")));
         lines.push(t(s, "lLangs") + ": " + esc(pr.langs.map((x) => t(s, x === "kk" ? "langKk" : "langRu")).join(", ")));
-        lines.push(t(s, "lCity") + ": " + esc(cityLabel(s, { id: pr.city })));
+        if (pr.city) lines.push(t(s, "lCity") + ": " + esc(cityLabel(s, { id: pr.city })));
         lines.push(t(s, "lAges") + ": " + esc(pr.ages.map((a) => lbl(s, AGES[a])).join(", ")));
         lines.push("");
         k.text(t(s, "btnPick", { name: pr.name }), "card:" + pr.id).text(t(s, "btnRemove", { name: pr.name }), "cmpx:" + pr.id).row();
@@ -714,7 +776,7 @@ export function createBot(deps) {
     } else {
       pr = profile(s.ui.spec);
       if (!pr) return show(ctx, "results");
-      if (missingCondition(s) || !pr.acceptsNew || !matches(pr, s)) return show(ctx, "specMismatch");
+      if (missingCondition(s) || !canRequest(pr) || !matches(pr, s)) return show(ctx, "specMismatch");
     }
 
     s.ui.retry = kind;
@@ -819,6 +881,11 @@ export function createBot(deps) {
   bot.use(async (ctx, next) => {
     const hasKey = ctx.chat || (ctx.update.widget_query && ctx.update.widget_query.chat);
     if (hasKey && (!ctx.session || ctx.session.v !== SESSION_VERSION)) ctx.session = initialState();
+    await next();
+  });
+
+  bot.use(async (ctx, next) => {
+    await refreshSpecialists();
     await next();
   });
 
