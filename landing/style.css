@@ -167,6 +167,36 @@ h2 {
 .cta h2 { color: #fff; }
 .cta p { font-size: 1.1rem; margin-bottom: 32px; }
 
+/* ---------- Форма заявки ---------- */
+.lead { max-width: 640px; }
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 32px;
+  background: var(--tint);
+  border-radius: var(--radius);
+}
+.form__field { display: flex; flex-direction: column; gap: 8px; font-weight: 600; font-size: 0.95rem; }
+.form__field input,
+.form__field textarea {
+  font: inherit;
+  font-weight: 400;
+  padding: 14px 16px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  resize: vertical;
+}
+.form__field input:focus,
+.form__field textarea:focus { outline: none; border-color: var(--red); }
+.form .btn { cursor: pointer; font-family: inherit; }
+.form .btn:disabled { opacity: 0.6; cursor: wait; }
+.form__status { min-height: 1.5em; font-weight: 600; text-align: center; }
+.form__status--ok { color: #1f7a3d; }
+.form__status--err { color: var(--red-dark); }
+
 /* ---------- Подвал ---------- */
 .footer { padding: 48px 0 32px; border-top: 1px solid #f0e0e3; }
 .footer__inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 24px; }

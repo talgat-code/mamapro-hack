@@ -24,9 +24,10 @@
         <a href="#about">О проекте</a>
         <a href="#how">Как это работает</a>
         <a href="#specialists">Специалисты</a>
+        <a href="#lead">Оставить заявку</a>
         <a href="#contacts">Контакты</a>
       </nav>
-      <a class="btn btn--white btn--small" href="#specialists">Найти специалиста</a>
+      <a class="btn btn--white btn--small" href="#lead">Найти специалиста</a>
     </div>
   </header>
 
@@ -38,7 +39,7 @@
         <h1>Реабилитация ребёнка начинается с поддержки мамы</h1>
         <p class="hero__lead">Mama Pro помогает родителям детей с особыми потребностями спокойно найти и выбрать коррекционного специалиста — без бесконечных поисков и сомнений.</p>
         <div class="hero__actions">
-          <a class="btn" href="#specialists">Найти специалиста</a>
+          <a class="btn" href="#lead">Найти специалиста</a>
           <a class="btn btn--ghost" href="#how">Как это работает</a>
         </div>
       </div>
@@ -141,7 +142,31 @@
       <div class="container cta__inner">
         <h2>Начните с первого шага</h2>
         <p>Расскажите о ребёнке — мы поможем найти того, кто подойдёт вашей семье.</p>
-        <a class="btn btn--white" href="#contacts">Найти специалиста</a>
+        <a class="btn btn--white" href="#lead">Найти специалиста</a>
+      </div>
+    </section>
+
+    <!-- Заявка -->
+    <section class="section" id="lead">
+      <div class="container lead">
+        <h2>Оставить заявку</h2>
+        <p class="section__lead">Расскажите коротко о запросе и оставьте контакт — мы свяжемся с вами.</p>
+        <form class="form" id="lead-form">
+          <label class="form__field">
+            <span>Ваше имя</span>
+            <input type="text" name="name" required maxlength="100" autocomplete="name" placeholder="Например, Анна">
+          </label>
+          <label class="form__field">
+            <span>Телефон или Telegram</span>
+            <input type="text" name="contact" required minlength="3" maxlength="150" autocomplete="tel" placeholder="+7 … или @username">
+          </label>
+          <label class="form__field">
+            <span>Сообщение (необязательно)</span>
+            <textarea name="message" rows="4" maxlength="1000" placeholder="Что важно учесть: возраст ребёнка, запрос, язык общения"></textarea>
+          </label>
+          <button class="btn" type="submit" id="lead-submit">Отправить заявку</button>
+          <p class="form__status" id="lead-status" role="status" aria-live="polite"></p>
+        </form>
       </div>
     </section>
   </main>
@@ -162,5 +187,8 @@
     </div>
   </footer>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
