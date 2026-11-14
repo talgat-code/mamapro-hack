@@ -5,13 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Mama Pro — поиск коррекционных специалистов для ребёнка</title>
   <meta name="description" content="Mama Pro помогает родителям детей с особыми потребностями находить и выбирать коррекционных специалистов. Демо-страница хакатона.">
-  <link rel="icon" href="logo.png">
+  <meta name="theme-color" content="#E62F4A">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Mama Pro">
+  <meta property="og:locale" content="ru_RU">
+  <meta property="og:title" content="Mama Pro — поиск коррекционных специалистов для ребёнка">
+  <meta property="og:description" content="Mama Pro помогает родителям детей с особыми потребностями находить и выбирать коррекционных специалистов. Демо-страница хакатона.">
+  <meta property="og:image" content="logo.png">
+  <meta property="og:image:alt" content="Логотип Mama Pro">
+  <link rel="icon" type="image/png" href="logo.png">
+  <link rel="apple-touch-icon" href="logo.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <a class="skip-link" href="#main">Перейти к содержимому</a>
 
   <!-- 1. Шапка -->
   <header class="header">
@@ -31,7 +41,7 @@
     </div>
   </header>
 
-  <main>
+  <main id="main">
     <!-- 2. Hero -->
     <section class="hero" id="about">
       <div class="container hero__inner">
@@ -51,37 +61,37 @@
         <h2>Какие специалисты помогут</h2>
         <p class="section__lead">Выберите направление — подробности и подбор появятся в следующих версиях.</p>
         <div class="grid grid--3">
-          <article class="card">
+          <article class="card" id="spec-logoped">
             <div class="card__icon" aria-hidden="true">🗣️</div>
             <h3>Логопед</h3>
             <p>Помогает развивать речь и коммуникацию ребёнка.</p>
             <a class="btn btn--small" href="#cta">Подробнее</a>
           </article>
-          <article class="card">
+          <article class="card" id="spec-defect">
             <div class="card__icon" aria-hidden="true">🧩</div>
             <h3>Дефектолог</h3>
             <p>Занимается развитием мышления, внимания и памяти.</p>
             <a class="btn btn--small" href="#cta">Подробнее</a>
           </article>
-          <article class="card">
+          <article class="card" id="spec-neuro">
             <div class="card__icon" aria-hidden="true">🧠</div>
             <h3>Нейропсихолог</h3>
             <p>Оценивает когнитивные функции и подбирает упражнения.</p>
             <a class="btn btn--small" href="#cta">Подробнее</a>
           </article>
-          <article class="card">
+          <article class="card" id="spec-psych">
             <div class="card__icon" aria-hidden="true">💬</div>
             <h3>Психолог</h3>
             <p>Поддерживает эмоционально — ребёнка и всю семью.</p>
             <a class="btn btn--small" href="#cta">Подробнее</a>
           </article>
-          <article class="card">
+          <article class="card" id="spec-lfk">
             <div class="card__icon" aria-hidden="true">🤸</div>
             <h3>ЛФК-инструктор</h3>
             <p>Развивает моторику и координацию через движение.</p>
             <a class="btn btn--small" href="#cta">Подробнее</a>
           </article>
-          <article class="card">
+          <article class="card" id="spec-aba">
             <div class="card__icon" aria-hidden="true">🌱</div>
             <h3>АВА-терапевт</h3>
             <p>Формирует навыки и поведение поэтапно, в игре.</p>
@@ -137,7 +147,32 @@
       </div>
     </section>
 
-    <!-- 6. Призыв к действию -->
+    <!-- 6. Блок доверия -->
+    <section class="section" id="trust">
+      <div class="container">
+        <h2>Чему можно доверять</h2>
+        <p class="section__lead">Коротко о том, как мы относимся к вам и вашим данным.</p>
+        <div class="grid grid--3">
+          <article class="card">
+            <div class="card__icon" aria-hidden="true">✅</div>
+            <h3>Проверка специалистов (пример)</h3>
+            <p>Здесь будет описано, как проверяются документы и опыт специалистов. Сейчас это заглушка — реальный порядок проверки ещё не описан.</p>
+          </article>
+          <article class="card">
+            <div class="card__icon" aria-hidden="true">🔒</div>
+            <h3>Конфиденциальность данных</h3>
+            <p>В заявке мы просим только то, что нужно для связи. Сведения о диагнозе ребёнка указывать не обязательно — вы сами решаете, что написать.</p>
+          </article>
+          <article class="card">
+            <div class="card__icon" aria-hidden="true">🤝</div>
+            <h3>Поддержка семьи</h3>
+            <p>Можно задать вопрос в мессенджере и вернуться к подбору, если специалист не подошёл. Вы не остаётесь с выбором один на один.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. Призыв к действию -->
     <section class="cta" id="cta">
       <div class="container cta__inner">
         <h2>Начните с первого шага</h2>
@@ -146,10 +181,86 @@
       </div>
     </section>
 
-    <!-- Заявка -->
+    <!-- 8. Мини-опрос -->
+    <section class="section section--tint" id="quiz" aria-labelledby="quiz-title">
+      <div class="container quiz">
+        <h2 id="quiz-title">Подберём специалиста</h2>
+        <p class="section__lead">Ответьте на 4 коротких вопроса — подскажем, к какому специалисту стоит присмотреться.</p>
+
+        <div class="quiz__card">
+          <noscript><p class="note">Для подбора нужен JavaScript. Вы можете сразу оставить заявку ниже.</p></noscript>
+
+          <form class="quiz__form" id="quiz-form" novalidate>
+            <div class="quiz__top">
+              <p class="quiz__progress" id="quiz-progress" aria-live="polite">Шаг 1 из 4</p>
+              <div class="quiz__bar" aria-hidden="true"><span id="quiz-bar"></span></div>
+            </div>
+
+            <fieldset class="quiz__step" data-step="age" tabindex="-1">
+              <legend>Сколько лет ребёнку?</legend>
+              <div class="options">
+                <label class="option"><input type="radio" name="age" value="до 3"><span>До 3 лет</span></label>
+                <label class="option"><input type="radio" name="age" value="3–6"><span>3–6 лет</span></label>
+                <label class="option"><input type="radio" name="age" value="7–12"><span>7–12 лет</span></label>
+                <label class="option"><input type="radio" name="age" value="13+"><span>13+ лет</span></label>
+              </div>
+            </fieldset>
+
+            <fieldset class="quiz__step" data-step="topic" tabindex="-1" hidden>
+              <legend>С чем нужна помощь?</legend>
+              <p class="quiz__hint">Можно выбрать несколько вариантов.</p>
+              <div class="options options--list">
+                <label class="option"><input type="checkbox" name="topic" value="речь"><span>Речь</span></label>
+                <label class="option"><input type="checkbox" name="topic" value="поведение и эмоции"><span>Поведение и эмоции</span></label>
+                <label class="option"><input type="checkbox" name="topic" value="обучение и внимание"><span>Обучение и внимание</span></label>
+                <label class="option"><input type="checkbox" name="topic" value="моторика и движение"><span>Моторика и движение</span></label>
+                <label class="option"><input type="checkbox" name="topic" value="не знаю"><span>Не знаю</span></label>
+              </div>
+            </fieldset>
+
+            <fieldset class="quiz__step" data-step="format" tabindex="-1" hidden>
+              <legend>Какой формат занятий удобнее?</legend>
+              <div class="options options--list">
+                <label class="option"><input type="radio" name="format" value="онлайн"><span>Онлайн</span></label>
+                <label class="option"><input type="radio" name="format" value="очно"><span>Очно</span></label>
+                <label class="option"><input type="radio" name="format" value="любой"><span>Любой</span></label>
+              </div>
+            </fieldset>
+
+            <fieldset class="quiz__step" data-step="city" tabindex="-1" hidden>
+              <legend>В каком вы городе?</legend>
+              <label class="form__field">
+                <span>Город (можно оставить пустым)</span>
+                <input type="text" name="city" maxlength="60" autocomplete="address-level2" placeholder="Например, Астана">
+              </label>
+            </fieldset>
+
+            <p class="quiz__error" id="quiz-error" role="alert"></p>
+            <div class="quiz__nav">
+              <button class="btn btn--ghost" type="button" id="quiz-back" hidden>Назад</button>
+              <button class="btn" type="submit" id="quiz-next">Далее</button>
+            </div>
+          </form>
+
+          <div class="quiz__result" id="quiz-result" tabindex="-1" hidden>
+            <p class="quiz__kicker">Результат подбора</p>
+            <h3 id="quiz-result-title"></h3>
+            <ul class="quiz__recs" id="quiz-recs"></ul>
+            <p class="quiz__why" id="quiz-why"></p>
+            <p class="quiz__disclaimer">Это не медицинская рекомендация.</p>
+            <div class="quiz__actions">
+              <button class="btn" type="button" id="quiz-apply">Оставить заявку</button>
+              <button class="btn btn--ghost" type="button" id="quiz-restart">Пройти заново</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9. Заявка -->
     <section class="section" id="lead">
       <div class="container lead">
-        <h2>Оставить заявку</h2>
+        <h2 id="lead-title" tabindex="-1">Оставить заявку</h2>
         <p class="section__lead">Расскажите коротко о запросе и оставьте контакт — мы свяжемся с вами.</p>
         <form class="form" id="lead-form">
           <label class="form__field">
@@ -162,16 +273,65 @@
           </label>
           <label class="form__field">
             <span>Сообщение (необязательно)</span>
-            <textarea name="message" rows="4" maxlength="1000" placeholder="Что важно учесть: возраст ребёнка, запрос, язык общения"></textarea>
+            <textarea name="message" rows="5" maxlength="1000" placeholder="Что важно учесть: возраст ребёнка, запрос, язык общения"></textarea>
           </label>
+          <p class="form__hint" id="prefill-note" hidden>Ответы мини-опроса подставлены в сообщение — их можно править.</p>
+          <div class="consent">
+            <label class="consent__label">
+              <input type="checkbox" name="consent" required aria-describedby="consent-note">
+              <span>Я согласен(на) на обработку персональных данных</span>
+            </label>
+            <p class="consent__note" id="consent-note">Данные используются только для связи с вами по этой заявке.</p>
+          </div>
           <button class="btn" type="submit" id="lead-submit">Отправить заявку</button>
           <p class="form__status" id="lead-status" role="status" aria-live="polite"></p>
         </form>
+
+        <div class="messengers" hidden>
+          <p class="messengers__label">Или напишите нам в мессенджер:</p>
+          <div class="messengers__buttons">
+            <a class="btn btn--small" data-config-url="TELEGRAM_URL" target="_blank" rel="noopener" hidden>Написать в Telegram<span class="sr-only"> (откроется в новой вкладке)</span></a>
+            <a class="btn btn--ghost btn--small" data-config-url="WHATSAPP_URL" target="_blank" rel="noopener" hidden>WhatsApp<span class="sr-only"> (откроется в новой вкладке)</span></a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10. FAQ -->
+    <section class="section section--tint" id="faq" aria-labelledby="faq-title">
+      <div class="container faq">
+        <h2 id="faq-title">Частые вопросы</h2>
+        <p class="section__lead">Если не нашли ответ — напишите нам, подскажем.</p>
+
+        <details class="faq__item">
+          <summary>Как выбрать специалиста?</summary>
+          <p>Начните с мини-опроса выше: он подскажет, какой тип специалиста стоит рассмотреть — например, логопеда, дефектолога или психолога. Это ориентир, а не диагноз. Если сомневаетесь, обсудите запрос с лечащим врачом, а затем оставьте заявку — мы свяжемся с вами.</p>
+        </details>
+        <details class="faq__item">
+          <summary>Сколько это стоит?</summary>
+          <p>Стоимость зависит от специалиста. Фиксированных тарифов на этой странице пока нет — цену нужно уточнять у выбранного специалиста до записи. (пример)</p>
+        </details>
+        <details class="faq__item">
+          <summary>Как проверяются специалисты?</summary>
+          <p>(пример) Здесь появится описание: какие документы проверяются и что специалист указывает о себе сам. Сейчас это заглушка — порядок проверки будет описан позже.</p>
+        </details>
+        <details class="faq__item">
+          <summary>Онлайн или очно — что выбрать?</summary>
+          <p>Онлайн удобно, если рядом нет подходящего специалиста или трудно ездить. Очно часто лучше для занятий с движением и моторикой. Формат можно обсудить со специалистом; в опросе можно выбрать «любой».</p>
+        </details>
+        <details class="faq__item">
+          <summary>Как хранятся мои данные?</summary>
+          <p>Имя, контакт и сообщение из формы сохраняются в базе заявок и используются только для связи с вами. Ответы мини-опроса остаются в вашем браузере, пока вы сами не отправите заявку. Не указывайте лишних сведений о здоровье ребёнка. Сроки хранения и порядок удаления данных будут описаны позже. (пример)</p>
+        </details>
+        <details class="faq__item">
+          <summary>Что делать, если специалист не подошёл?</summary>
+          <p>Это нормально: подходящий специалист находится не всегда с первого раза. Напишите нам в мессенджер или отправьте заявку ещё раз и укажите, что не подошло — формат, подход или время. Мы вернёмся к подбору.</p>
+        </details>
       </div>
     </section>
   </main>
 
-  <!-- 7. Подвал -->
+  <!-- 11. Подвал -->
   <footer class="footer" id="contacts">
     <div class="container footer__inner">
       <div class="brand brand--dark">
@@ -183,9 +343,20 @@
         <a href="tel:+70000000000">+7 (000) 000-00-00</a>
         <span>г. Город, ул. Примерная, 1</span>
       </div>
+      <div class="messengers messengers--footer" hidden>
+        <div class="messengers__buttons">
+          <a class="btn btn--small" data-config-url="TELEGRAM_URL" target="_blank" rel="noopener" hidden>Написать в Telegram<span class="sr-only"> (откроется в новой вкладке)</span></a>
+          <a class="btn btn--ghost btn--small" data-config-url="WHATSAPP_URL" target="_blank" rel="noopener" hidden>WhatsApp<span class="sr-only"> (откроется в новой вкладке)</span></a>
+        </div>
+      </div>
       <p class="footer__copy">© 2026 Mama Pro. Демо-страница хакатона, контакты и тексты — заглушки.</p>
     </div>
   </footer>
+
+  <!-- Плавающая кнопка Telegram (только на мобильных) -->
+  <a class="fab" data-config-url="TELEGRAM_URL" target="_blank" rel="noopener" aria-label="Написать в Telegram (откроется в новой вкладке)" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+  </a>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
