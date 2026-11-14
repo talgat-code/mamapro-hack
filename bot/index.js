@@ -2,11 +2,16 @@
 
 // Telegram-бот Mama Pro (демо хакатона). Long polling, состояние диалога — в памяти.
 const path = require("path");
-require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
-const { Bot, InlineKeyboard } = require("grammy");
+// Файл окружения: по умолчанию .env в корне репозитория; `node index.js --env .env.test` — другой.
+const ENV_ARG = process.argv.indexOf("--env");
+const ENV_FILE = ENV_ARG !== -1 && process.argv[ENV_ARG + 1] ? process.argv[ENV_ARG + 1] : ".env";
+require("dotenv").config({ path: path.join(__dirname, "..", ENV_FILE) });
+const { Bot, InlineKeyboard, API_CONSTANTS } = require("grammy");
 const { createClient } = require("@supabase/supabase-js");
 
-const { BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY } = process.env;
+const { BOT_TOKEN, SUPABASE_URL, SUPABASE_ANON_KEY, BOT_API_BASE, BOT_TEST_ENV } = process.env;
+// Эксперимент с виджетами (bot/widget): выключен, пока не задано WIDGETS_ENABLED=1.
+const WIDGETS_ENABLED = process.env.WIDGETS_ENABLED === "1";
 const SITE_URL = "https://mama-pro-hack.vercel.app";
 const GENERIC_ERROR = "Что-то пошло не так, попробуйте позже";
 
@@ -177,7 +182,18 @@ function topicsText(q) {
 }
 
 // ---------- Бот ----------
-const bot = new Bot(BOT_TOKEN);
+// Адрес Bot API меняется только если задан в env (бета, тестовое окружение); по умолчанию — как раньше.
+const clientConfig = {};
+if (BOT_API_BASE) clientConfig.apiRoot = BOT_API_BASE.replace(/\/+$/, "");
+if (BOT_TEST_ENV === "1") clientConfig.environment = "test";
+const bot = new Bot(BOT_TOKEN, Object.keys(clientConfig).length ? { client: clientConfig } : undefined);
+
+if (WIDGETS_ENABLED) {
+  require("./widget").setupWidgets(bot, {
+    AGES: AGES, TOPICS: TOPICS, FORMATS: FORMATS, SPECIALISTS: SPECIALISTS, DONT_KNOW: DONT_KNOW,
+    recommend: recommend, startLead: startLeadFromWidget, logError: logError
+  });
+}
 
 // Закрываем «часики» на кнопке и сбрасываем ожидание текста: каждое нажатие кнопки начинает новый шаг.
 bot.on("callback_query:data", async function (ctx, next) {
@@ -343,16 +359,32 @@ bot.callbackQuery("quiz:back", withQuiz(function (ctx, s, q) {
 // ----- Заявка -----
 const cancelKeyboard = function () { return new InlineKeyboard().text("Отмена", "lead:cancel"); };
 
+function leadIntro() {
+  return {
+    text: "Чтобы передать заявку, нужно ваше согласие на обработку персональных данных.\n\n" +
+      "Имя и контакт используются только для связи с вами по этой заявке. " +
+      "Вместе с ними сохранятся ответы опроса (если вы его проходили), ваш Telegram id и username.\n\n" +
+      "Согласны?",
+    kb: new InlineKeyboard().text("Согласен(на)", "lead:yes").text("Отмена", "lead:cancel")
+  };
+}
+
 bot.callbackQuery("lead:start", function (ctx) {
   var s = getState(ctx.chat.id);
   resetLead(s);
-  var text = "Чтобы передать заявку, нужно ваше согласие на обработку персональных данных.\n\n" +
-    "Имя и контакт используются только для связи с вами по этой заявке. " +
-    "Вместе с ними сохранятся ответы опроса (если вы его проходили), ваш Telegram id и username.\n\n" +
-    "Согласны?";
-  var kb = new InlineKeyboard().text("Согласен(на)", "lead:yes").text("Отмена", "lead:cancel");
-  return render(ctx, text, kb);
+  var intro = leadIntro();
+  return render(ctx, intro.text, intro.kb);
 });
+
+// Кнопка «Оставить заявку» в виджете: переносим ответы опроса в обычное состояние и начинаем заявку сообщением.
+async function startLeadFromWidget(chatId, quiz) {
+  var s = getState(chatId);
+  resetLead(s);
+  s.quiz = { step: 4, age: quiz.age, topics: quiz.topics, format: quiz.format, city: "", rec: quiz.rec, done: true };
+  var intro = leadIntro();
+  var sent = await bot.api.sendMessage(chatId, intro.text, { reply_markup: intro.kb });
+  s.msgId = sent.message_id;
+}
 
 bot.callbackQuery("lead:yes", function (ctx) {
   var s = getState(ctx.chat.id);
@@ -452,9 +484,13 @@ process.on("unhandledRejection", function (e) { logError("unhandledRejection", e
 process.once("SIGINT", function () { bot.stop(); });
 process.once("SIGTERM", function () { bot.stop(); });
 
-bot.start({
+var startOptions = {
   onStart: function (me) { console.log("Бот @" + me.username + " запущен (long polling). Остановка: Ctrl+C."); }
-}).catch(function (e) {
+};
+// Новые типы апдейтов добавляются к умолчаниям grammY; без флага allowed_updates не передаётся, как раньше.
+if (WIDGETS_ENABLED) startOptions.allowed_updates = API_CONSTANTS.DEFAULT_UPDATE_TYPES.concat(require("./widget").UPDATE_TYPES);
+
+bot.start(startOptions).catch(function (e) {
   logError("start", e);
   process.exit(1);
 });

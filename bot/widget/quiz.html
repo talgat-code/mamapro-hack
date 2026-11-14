@@ -1,0 +1,61 @@
+<style>
+body{margin:0;padding:12px 14px calc(12px + env(safe-area-inset-bottom));font:15px/1.35 system-ui,sans-serif;color:var(--tg-theme-text-color)}
+h3{margin:0;font-size:16px}
+.h{color:var(--tg-theme-hint-color);font-size:13px;margin-top:2px}
+.pg{display:flex;gap:4px;margin:10px 0}
+.pg i{flex:1;height:3px;border-radius:2px;background:var(--tg-theme-secondary-bg-color)}
+.pg i.on{background:var(--tg-theme-button-color)}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0 0}
+.g1{grid-template-columns:1fr}
+.g3{grid-template-columns:1fr 1fr 1fr}
+button{font:inherit;border:0;border-radius:10px;padding:9px 8px;background:var(--tg-theme-secondary-bg-color);color:var(--tg-theme-text-color)}
+.s,.p{background:var(--tg-theme-button-color);color:var(--tg-theme-button-text-color)}
+.r{display:flex;gap:6px;margin-top:8px}
+.r button{flex:1}
+.c{padding:8px 10px;margin-top:6px;border-radius:10px;background:var(--tg-theme-secondary-bg-color)}
+.c b{display:block;color:var(--tg-theme-accent-text-color,var(--tg-theme-link-color))}
+.busy button{pointer-events:none}
+</style>
+<div id="w"></div>
+<script>
+const TW=window.TelegramWidget,w=document.getElementById('w');
+const J=s=>{try{return JSON.parse(s)||{}}catch(e){return{}}};
+let C=J(TW&&TW.chatData),P=J(TW&&TW.publicData),busy=0,msg='';
+const fwd=!!(TW&&TW.isForward),pre=!!(TW&&TW.isPreview),can=!!(TW&&TW.viewer)&&!fwd&&!pre;
+const Q=['Сколько лет ребёнку?','С чем нужна помощь? Можно выбрать несколько.','Какой формат занятий удобнее?'];
+const E={NOT_ALLOWED:'Нажмите в чате с ботом',BUSY:'Подождите…',TIMEOUT:'Бот не ответил, попробуйте ещё раз',RATE_LIMITED:'Слишком часто, подождите немного'};
+const e=s=>String(s).replace(/[&<>"]/g,c=>'&#'+c.charCodeAt(0)+';');
+const B=(t,q,c)=>'<button data-q="'+q+'"'+(c?' class="'+c+'"':'')+'>'+e(t)+'</button>';
+const st=()=>[C.s||1,C.a??'',(C.t||[]).join(''),C.f??''].join(',');
+function res(){
+let h='';(P.r||[]).forEach(x=>{h+='<div class="c"><b>'+e(x[0])+'</b>'+e(x[1])+'</div>'});
+return h+(P.n?'<div class="h">'+e(P.n)+'</div>':'')+'<div class="h">Это не медицинская рекомендация.</div>'}
+function draw(){
+const o=P.o||{},s=C.s||1;let h;
+if(fwd||(!C.s&&P.r)){
+h='<h3>Подбор специалиста Mama Pro</h3>'+(P.r?'<div class="h">Может подойти:</div>'+res():'<div class="h">Ответьте на 3 вопроса — подскажем, с кем начать.</div>');
+if(P.u)h+='<div class="r">'+B('Подобрать в боте','go','p')+'</div>'}
+else if(s>3){
+h='<h3>Вам может подойти</h3>'+res()+'<div class="r">'+B('Оставить заявку','l','p')+'</div><div class="r">'+B('← Изменить','b')+B('Заново','r')+'</div>'}
+else{
+const k='atf'[s-1],t=C.t||[];
+h='<h3>Подбор специалиста</h3><div class="h">Шаг '+s+' из 3</div><div class="pg">'+[1,2,3].map(i=>'<i'+(i<=s?' class="on"':'')+'></i>').join('')+'</div>'+Q[s-1]+'<div class="g'+(s==2?' g1':s==3?' g3':'')+'">';
+(o[k]||[]).forEach((x,i)=>{h+=B((s==2&&t.includes(i)?'✓ ':'')+x,k+':'+i,(s==1?C.a===i:s==2?t.includes(i):C.f===i)?'s':'')});
+h+='</div>';
+const r=(s>1?B('← Назад','b'):'')+(s==2&&t.length?B('Далее →','n','p'):'');
+if(r)h+='<div class="r">'+r+'</div>'}
+const m=msg||(!can&&!fwd&&!pre?'Откройте в чате с ботом':'');
+w.className=busy?'busy':'';
+w.innerHTML=h+(m?'<div class="h">'+e(m)+'</div>':'')}
+w.onclick=ev=>{
+let b=ev.target;while(b&&b!==w&&!b.dataset.q)b=b.parentNode;
+const q=b&&b.dataset&&b.dataset.q;if(!q||!TW)return;
+if(q=='go'){try{TW.openTelegramLink('https://t.me/'+P.u)}catch(x){}return}
+if(!can||busy)return;
+busy=1;msg='…';draw();
+TW.request(q+'|'+st()).then(a=>{const x=J(a&&a.result);busy=0;msg=x.err||x.m||'';if(x.c)C=x.c;if(x.p)P=x.p;draw()},
+x=>{busy=0;msg=E[x&&x.code]||'Не отправлено, попробуйте ещё раз';draw()})};
+if(TW){TW.onEvent('chatDataChanged',()=>{C=J(TW.chatData);draw()});TW.onEvent('publicDataChanged',()=>{P=J(TW.publicData);draw()})}
+draw();
+TW&&TW.ready&&TW.ready();
+</script>
