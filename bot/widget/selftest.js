@@ -82,7 +82,7 @@ async function check(name, fn) {
     await check("без флага /widget — неизвестная команда", async function () {
       var cs = await run(msg("/widget"));
       assert.deepStrictEqual(cs.map(function (c) { return c.method; }), ["sendPhoto"]);
-      assert(/I-HELP/.test(cs[0].payload.caption)); // язык не выбран → приветствие с выбором языка
+      assert(/I-Help/i.test(cs[0].payload.caption)); // язык не выбран → приветствие с выбором языка
     });
     await check("без флага widget_query игнорируется", async function () {
       var cs = await run(wq("a:1|1,,,"));
@@ -110,7 +110,7 @@ async function check(name, fn) {
     await check("/start по-прежнему работает", async function () {
       var cs = await run(msg("/start"));
       assert.strictEqual(cs[0].method, "sendPhoto");
-      assert(/I-HELP/.test(cs[0].payload.caption)); // приветствие I-HELP × MamaPro с выбором языка
+      assert(/I-Help/i.test(cs[0].payload.caption)); // приветствие I-HELP × MamaPro с выбором языка
     });
 
     var flow = [
