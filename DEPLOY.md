@@ -59,6 +59,13 @@
 `python supabase/demo/gen_specialists.py > supabase/migrations/<дата>_<имя>.sql`.
 Бот читает профили с кэшем на минуту; если таблица недоступна — встроенный запасной набор из `catalog.mjs`.
 
+## Регистрация на сайте
+Подтверждение email выключено (демо: регистрация сразу открывает кабинет; встроенная почта Supabase шлёт письма
+только участникам проекта). Изменено точечно, без затирания остальных настроек: временный `config.toml` только с
+`[auth.email] enable_confirmations = false` → `npx supabase config diff/push --workdir <папка> --remote=<ref>`.
+Не делайте `config push` с основным `supabase/config.toml`: в нём локальные значения (`site_url = 127.0.0.1`).
+Для запуска: своя SMTP-почта, включить подтверждение, Site URL `https://mama-pro-hack.vercel.app` (сейчас `localhost:3000`).
+
 ## Заявки
 Таблица `public.leads`: аноним может только добавлять строки (RLS). Читать заявки —
 в дашборде Supabase (Table Editor) или через service_role на сервере.
